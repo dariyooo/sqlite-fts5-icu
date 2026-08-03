@@ -77,11 +77,19 @@ jobs:
       # MSYS2 has no arm64 cross compiler; llvm-mingw covers both Windows
       # architectures from one toolchain.
       - name: Install llvm-mingw
+        # api.github.com refuses unauthenticated calls from Actions runners.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          url=$(curl -fsSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
+          url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
             | grep -o '"browser_download_url": *"[^"]*-ucrt-x86_64\.zip"' \
             | head -1 | cut -d'"' -f4)
+          if [ -z "$url" ]; then
+            echo "::error::could not resolve an llvm-mingw ucrt-x86_64 asset"
+            exit 1
+          fi
           echo "using $url"
           curl -fsSL -o /tmp/llvm-mingw.zip "$url"
           mkdir -p /opt/llvm-mingw
