@@ -1,0 +1,141 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One job per runner OS rather than one per target: ICU has to be built twice
+# for every target, and the first of those two builds is the same for every
+# target on a given machine.
+jobs:
+  apple:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          for target in mac_arm64 mac_x64 ios_arm64 ios-sim_arm64 ios-sim_x64; do
+            ./scripts/build.sh "$target"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apple
+          path: dist/*
+          if-no-files-found: error
+
+  # Pinned rather than ubuntu-latest: the glibc the linux libraries end up
+  # requiring is the one this image ships.
+  linux-android:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the aarch64 cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+      # ANDROID_NDK_LATEST_HOME comes from the runner image; toolchain.sh falls
+      # back to it, so nothing has to be passed in here.
+      - name: Build
+        run: |
+          for target in linux_x64 linux_arm64 android_arm64 android_arm android_x64; do
+            ./scripts/build.sh "$target"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-android
+          path: dist/*
+          if-no-files-found: error
+
+  # Nothing here comes from the image itself, so it can float: the compilers are
+  # MSYS2's and llvm-mingw's.
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      # ICU's build system is autoconf and GNU make, so the Windows build runs
+      # under MSYS2 rather than MSVC.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            unzip
+            zip
+            curl
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-python
+      # MSYS2 has no arm64 cross compiler; llvm-mingw covers both Windows
+      # architectures from one toolchain.
+      - name: Install llvm-mingw
+        run: |
+          set -euo pipefail
+          url=$(curl -fsSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
+            | grep -o '"browser_download_url": *"[^"]*-ucrt-x86_64\.zip"' \
+            | head -1 | cut -d'"' -f4)
+          echo "using $url"
+          curl -fsSL -o /tmp/llvm-mingw.zip "$url"
+          mkdir -p /opt/llvm-mingw
+          unzip -q /tmp/llvm-mingw.zip -d /tmp/llvm-mingw-extract
+          mv /tmp/llvm-mingw-extract/*/* /opt/llvm-mingw/
+          /opt/llvm-mingw/bin/x86_64-w64-mingw32-clang --version
+      # GITHUB_PATH takes Windows paths, so the toolchain is put on PATH here
+      # rather than exported from the step above.
+      - name: Build
+        run: |
+          export PATH="/opt/llvm-mingw/bin:$PATH"
+          for target in windows_x64 windows_arm64; do
+            ./scripts/build.sh "$target"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [apple, linux-android, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Check every target is present
+        run: |
+          set -euo pipefail
+          expected="fts5_icu_mac_arm64.dylib fts5_icu_mac_x64.dylib \
+            fts5_icu_ios_arm64.dylib fts5_icu_ios-sim_arm64.dylib fts5_icu_ios-sim_x64.dylib \
+            fts5_icu_linux_x64.so fts5_icu_linux_arm64.so \
+            fts5_icu_android_arm64.so fts5_icu_android_arm.so fts5_icu_android_x64.so \
+            fts5_icu_windows_x64.dll fts5_icu_windows_arm64.dll"
+          missing=""
+          for name in $expected; do
+            [ -f "dist/$name" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing artifacts:$missing"
+            exit 1
+          fi
+          ls -l dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Loadable \`fts5_icu\` extension with a trimmed ICU linked in statically.
+
+          Each asset is named \`fts5_icu_{platform}_{arch}.{ext}\`, which is the
+          name DaLang's \`sqlite_extensions\` build hook looks for."

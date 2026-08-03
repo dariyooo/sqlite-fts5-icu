@@ -1,0 +1,98 @@
+// Which items survive in the ICU data package, read by ICU's data builder
+// through ICU_DATA_FILTER_FILE. The full package is 31.4 MiB; this keeps the
+// break iteration and transliteration data the tokenizer and
+// icu_transliterate() read, and drops the rest.
+//
+// Adapted from Chromium's filters/flutter.json, which covers the same
+// break-iteration-only case, with three changes:
+//   - cjdict is kept. Chromium strips it because Android's system ICU already
+//     carries it; this build is self-contained, and it is the dictionary that
+//     segments Japanese and Chinese.
+//   - transliterators are kept. Chromium has no use for them; they are what
+//     turns a term into the normalized form the search's normalized tier
+//     matches against.
+//   - the line, sentence and title rules are dropped. Those serve text layout,
+//     and only the word iterator is ever opened.
+//
+// ICU's JSON reader only strips a comment when "//" is the first thing on the
+// line, so every comment below sits at column zero.
+{
+  "featureFilters": {
+
+// Dictionaries for the scripts that mark no word boundaries. cjdict alone is
+// ~1.96 MiB and does the work for Japanese and Chinese.
+    "brkitr_dictionaries": {
+      "includelist": ["cjdict", "thaidict", "khmerdict", "laodict", "burmesedict"]
+    },
+
+// char is retained alongside word because ICU reaches for grapheme boundaries
+// while resolving word breaks.
+    "brkitr_rules": {
+      "includelist": ["char", "word"]
+    },
+
+// root carries the rules every locale falls back to; ja adds the suffix list
+// that stops Japanese words being split mid-inflection.
+    "brkitr_tree": {
+      "includelist": ["root", "ja"]
+    },
+
+// The neural models Thai and Burmese can use instead of their dictionaries.
+// The dictionaries above already cover both.
+    "brkitr_lstm": { "filterType": "exclude" },
+    "brkitr_adaboost": { "filterType": "exclude" },
+
+// nfkc backs the width folding every rule set starts with; nfc is the inverse
+// half of the built-in Katakana-Hiragana rules.
+    "normalization": {
+      "includelist": ["nfc", "nfkc"]
+    },
+
+// Version stamps and the locale fallback table ICU needs to resolve a break
+// iterator at all.
+    "misc": {
+      "includelist": ["icustd", "icuver", "likelySubtags"]
+    },
+
+// Removed by UCONFIG_NO_CONVERSION at compile time; excluded here so the
+// ~4.9 MiB of mapping tables leave the package too.
+    "conversion_mappings": { "filterType": "exclude" },
+
+    "coll_tree": { "filterType": "exclude" },
+    "coll_ucadata": { "filterType": "exclude" },
+    "curr_supplemental": { "filterType": "exclude" },
+    "zone_supplemental": { "filterType": "exclude" },
+    "confusables": { "filterType": "exclude" },
+    "curr_tree": { "filterType": "exclude" },
+    "lang_tree": { "filterType": "exclude" },
+    "locales_tree": { "filterType": "exclude" },
+    "rbnf_tree": { "filterType": "exclude" },
+    "region_tree": { "filterType": "exclude" },
+    "stringprep": { "filterType": "exclude" },
+    "unames": { "filterType": "exclude" },
+    "unit_tree": { "filterType": "exclude" },
+    "zone_tree": { "filterType": "exclude" }
+  },
+
+// The brkitr bundles still name the rules dropped above, plus a /Version
+// string nothing reads. Strip both so no bundle points at a missing file.
+  "resourceFilters": [
+    {
+      "categories": ["brkitr_tree"],
+      "rules": [
+        "-/Version",
+        "-/lstm",
+        "-/boundaries/line",
+        "-/boundaries/line_loose",
+        "-/boundaries/line_loose_phrase",
+        "-/boundaries/line_normal",
+        "-/boundaries/line_normal_phrase",
+        "-/boundaries/line_phrase",
+        "-/boundaries/line_strict",
+        "-/boundaries/line_strict_phrase",
+        "-/boundaries/sentence",
+        "-/boundaries/title"
+      ]
+    }
+  ]
+}
