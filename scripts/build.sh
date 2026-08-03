@@ -100,19 +100,29 @@ fi
 
 ICU_INST="$TARGET_DIR/inst"
 
-# ICU's archive names depend on the platform makefile: Windows shortens the
-# library stubs and prefixes static libraries with s. Rather than predict which
-# naming a target uses, take whichever one the build produced.
+# Two things vary by platform and neither is worth predicting: ICU's archive
+# names (Windows shortens the library stubs and prefixes static libraries with
+# s) and where `make install` puts them (mh-mingw64 sends the data library to
+# bindir). So search every plausible name in every plausible directory and take
+# the largest hit — which also rules out the stub data library, a few hundred
+# bytes standing in for 4 MiB.
 icu_lib() {
-  local candidate
-  for candidate in "$@"; do
-    if [[ -f "$ICU_INST/lib/$candidate" ]]; then
-      echo "$ICU_INST/lib/$candidate"
-      return
-    fi
+  local best="" best_size=0 dir candidate size
+  for dir in "$TARGET_DIR/lib" "$ICU_INST/lib" "$ICU_INST/bin"; do
+    for candidate in "$@"; do
+      [[ -f "$dir/$candidate" ]] || continue
+      size="$(wc -c < "$dir/$candidate" | tr -d ' ')"
+      if [[ "$size" -gt "$best_size" ]]; then
+        best="$dir/$candidate"
+        best_size="$size"
+      fi
+    done
   done
-  echo "none of $* found in $ICU_INST/lib" >&2
-  exit 1
+  if [[ -z "$best" ]]; then
+    echo "none of $* found under $TARGET_DIR" >&2
+    exit 1
+  fi
+  echo "$best"
 }
 
 LIB_I18N="$(icu_lib libicui18n.a libsicuin.a libsicui18n.a)"
