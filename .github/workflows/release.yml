@@ -23,6 +23,17 @@ jobs:
           for target in mac_arm64 mac_x64 ios_arm64 ios-sim_arm64 ios-sim_x64; do
             ./scripts/build.sh "$target"
           done
+      # ICU writes its output to log files, so a failure says almost nothing on
+      # its own.
+      - name: Show build logs
+        if: failure()
+        run: |
+          find build -name '*.a' -o -name 'inst' -type d | sort
+          for f in $(find build -maxdepth 2 -name '*.log' | sort); do
+            echo "::group::$f"
+            tail -80 "$f"
+            echo "::endgroup::"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: apple
@@ -45,6 +56,15 @@ jobs:
         run: |
           for target in linux_x64 linux_arm64 android_arm64 android_arm android_x64; do
             ./scripts/build.sh "$target"
+          done
+      - name: Show build logs
+        if: failure()
+        run: |
+          find build -name '*.a' -o -name 'inst' -type d | sort
+          for f in $(find build -maxdepth 2 -name '*.log' | sort); do
+            echo "::group::$f"
+            tail -80 "$f"
+            echo "::endgroup::"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -103,6 +123,16 @@ jobs:
           export PATH="/opt/llvm-mingw/bin:$PATH"
           for target in windows_x64 windows_arm64; do
             ./scripts/build.sh "$target"
+          done
+      - name: Show build logs
+        if: failure()
+        run: |
+          find build -name '*.a' | sort
+          ls -lR build/windows_x64/inst 2>/dev/null || true
+          for f in $(find build -maxdepth 2 -name '*.log' | sort); do
+            echo "::group::$f"
+            tail -80 "$f"
+            echo "::endgroup::"
           done
       - uses: actions/upload-artifact@v4
         with:
