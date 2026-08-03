@@ -88,6 +88,10 @@ if [[ ! -f "$TARGET_DIR/.stamp" ]]; then
     # --disable-tools drops data from the default target unless configure
     # decided this is a cross build, so ask for it explicitly either way.
     $MAKE -C data -j"$JOBS" > data.log 2>&1
+    # mh-mingw64 installs the data library into bindir. When ICU decides to
+    # build data as part of the recursion, that install runs before anything
+    # has created the directory, and pkgdata fails.
+    mkdir -p "$TARGET_DIR/inst/bin" "$TARGET_DIR/inst/lib"
     $MAKE install > install.log 2>&1
     # The main install stages the stub data library; this overwrites it with
     # the real one.
