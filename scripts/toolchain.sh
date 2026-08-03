@@ -65,7 +65,7 @@ toolchain_configure() {
   case "$target" in
     mac_*|ios_*|ios-sim_*)
       SHARED_EXT=dylib
-      CXX_RUNTIME_LIBS="-lc++"
+      CXX_RUNTIME_LIBS=""
       # Only the entry point leaves the library; ICU's symbols stay private so
       # they can never bind to a system ICU of a different version.
       # headerpad_max_install_names leaves room for a consumer to rewrite the
@@ -77,7 +77,7 @@ toolchain_configure() {
       ;;
     linux_*|android_*)
       SHARED_EXT=so
-      CXX_RUNTIME_LIBS="-lstdc++ -lm"
+      CXX_RUNTIME_LIBS="-lm"
       SHARED_LDFLAGS="-shared -Wl,--gc-sections"
       EXPORT_SYMBOL_PREFIX=
       SMOKE_LIBS="-lm -ldl -lpthread"
@@ -85,8 +85,9 @@ toolchain_configure() {
       ;;
     windows_*)
       SHARED_EXT=dll
-      # Static libstdc++ and libgcc, so the DLL carries no toolchain runtime.
-      CXX_RUNTIME_LIBS="-static -static-libgcc -static-libstdc++"
+      # Pulls the toolchain's C++ library and unwinder in statically, so the
+      # DLL depends on nothing but the system CRT.
+      CXX_RUNTIME_LIBS="-static"
       SHARED_LDFLAGS="-shared -Wl,--gc-sections"
       EXPORT_SYMBOL_PREFIX=
       SMOKE_LIBS=""

@@ -158,13 +158,21 @@ case "$SHARED_EXT" in
     ;;
 esac
 
-echo "==> linking $OUT"
+echo "==> compiling the tokenizer"
 # shellcheck disable=SC2086
 "$TARGET_CC" \
-  -Os -fPIC -DU_STATIC_IMPLEMENTATION \
-  $TARGET_CFLAGS $SHARED_LDFLAGS $EXPORT_LDFLAGS \
+  -Os -fPIC -DU_STATIC_IMPLEMENTATION $TARGET_CFLAGS \
   -I"$SRC/include" -I"$ICU_INST/include" \
-  -o "$OUT" "$ROOT/src/fts5_icu.c" \
+  -c "$ROOT/src/fts5_icu.c" -o "$TARGET_DIR/link/fts5_icu.o"
+
+echo "==> linking $OUT"
+# ICU is C++, so the link goes through the C++ driver: it knows which standard
+# library and unwinder its own toolchain ships, which is not guessable from
+# here. llvm-mingw uses libc++ where a GCC toolchain uses libstdc++.
+# shellcheck disable=SC2086
+"$TARGET_CXX" \
+  $TARGET_CFLAGS $SHARED_LDFLAGS $EXPORT_LDFLAGS \
+  -o "$OUT" "$TARGET_DIR/link/fts5_icu.o" \
   "$LIB_I18N" "$LIB_UC" "$LIB_DATA" \
   $CXX_RUNTIME_LIBS $TARGET_LDFLAGS
 
