@@ -10,6 +10,18 @@
 
 #include "sqlite3.h"
 
+#ifdef _WIN32
+#include <windows.h>
+static void *dlOpen(const char *zPath) { return (void *)LoadLibraryA(zPath); }
+static void *dlSym(void *pLib, const char *zName) {
+  return (void *)GetProcAddress((HMODULE)pLib, zName);
+}
+#else
+#include <dlfcn.h>
+static void *dlOpen(const char *zPath) { return dlopen(zPath, RTLD_NOW); }
+static void *dlSym(void *pLib, const char *zName) { return dlsym(pLib, zName); }
+#endif
+
 static int gFailures = 0;
 
 static void fail(const char *zWhat, const char *zExpected, const char *zGot) {
@@ -71,6 +83,76 @@ static void checkTransliterate(sqlite3 *db, const char *zWhat, const char *zText
   char *zSql = sqlite3_mprintf("SELECT icu_transliterate(%Q, %Q)", zText, zRules);
   checkText(db, zWhat, zSql, zExpected);
   sqlite3_free(zSql);
+}
+
+/* The transliteration a host binds directly, exercised the way one does: the
+ * symbols have to leave the library, and one compiled rule set folds many
+ * strings. */
+static void checkNativeApi(const char *zPath) {
+  void *(*xOpen)(const char *);
+  void (*xClose)(void *);
+  char *(*xTrans)(void *, const char *);
+  void (*xFree)(char *);
+  void *pLib;
+  void *pTrans;
+  char *zOut;
+
+  pLib = dlOpen(zPath);
+  if (pLib == 0) {
+    fail("native api loads", "a library handle", "(null)");
+    return;
+  }
+
+  xOpen = (void *(*)(const char *))dlSym(pLib, "fts5icu_transliterator_open");
+  xClose = (void (*)(void *))dlSym(pLib, "fts5icu_transliterator_close");
+  xTrans = (char *(*)(void *, const char *))dlSym(pLib, "fts5icu_transliterate");
+  xFree = (void (*)(char *))dlSym(pLib, "fts5icu_free");
+  if (!xOpen || !xClose || !xTrans || !xFree) {
+    fail("native api is exported", "4 symbols", "at least one missing");
+    return;
+  }
+  pass("native api is exported");
+
+  /* Nothing beyond the documented entry points leaves the library: not our own
+   * helpers, and not ICU — whose symbols would show up unrenamed if the build
+   * ever stopped renaming them. */
+  if (dlSym(pLib, "icuTransliterateUtf8") || dlSym(pLib, "icuTransliteratorOpen") ||
+      dlSym(pLib, "utrans_openU") || dlSym(pLib, "u_foldCase")) {
+    fail("nothing else is exported", "no internal symbols", "at least one is reachable");
+  } else {
+    pass("nothing else is exported");
+  }
+
+  if (xOpen("::NoSuchTransform;") != 0) {
+    fail("native api rejects invalid rules", "(null)", "a handle");
+  } else {
+    pass("native api rejects invalid rules");
+  }
+
+  pTrans = xOpen("::NFKC;\n::[^ヵヶー] Katakana-Hiragana;\n");
+  if (pTrans == 0) {
+    fail("native api compiles rules", "a handle", "(null)");
+    return;
+  }
+
+  zOut = xTrans(pTrans, "ｺｰﾋｰ");
+  if (zOut && strcmp(zOut, "こーひー") == 0) {
+    pass("native api transliterates");
+  } else {
+    fail("native api transliterates", "こーひー", zOut);
+  }
+  xFree(zOut);
+
+  /* The second call reuses the handle, which is the point of opening it. */
+  zOut = xTrans(pTrans, "ＱＡ１２");
+  if (zOut && strcmp(zOut, "QA12") == 0) {
+    pass("native api reuses a compiled rule set");
+  } else {
+    fail("native api reuses a compiled rule set", "QA12", zOut);
+  }
+  xFree(zOut);
+
+  xClose(pTrans);
 }
 
 int main(int argc, char **argv) {
@@ -136,6 +218,8 @@ int main(int argc, char **argv) {
     }
     sqlite3_finalize(pStmt);
   }
+
+  checkNativeApi(argv[1]);
 
   sqlite3_close(db);
   if (gFailures) {

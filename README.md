@@ -30,6 +30,25 @@ text. Bad rules raise an error rather than quietly passing the text through. The
 compiled transliterator is cached on the rules argument, so a constant rule
 string costs one compile per statement, not one per row.
 
+### Transliterating outside SQL
+
+If you fold text before it reaches the database — building a search input, say —
+the same rules have to give the same answer on both sides. The library exports
+the transliteration as plain C so a host can bind it directly instead of
+reimplementing it:
+
+```c
+void *fts5icu_transliterator_open(const char *rules);   /* NULL if ICU rejects them */
+char *fts5icu_transliterate(void *transliterator, const char *utf8);
+void  fts5icu_free(char *result);
+void  fts5icu_transliterator_close(void *transliterator);
+```
+
+Compiling the rules is the expensive half, so the caller keeps the handle and
+folds many strings through it. A handle is not re-entrant — use one per thread.
+`fts5icu_transliterate` returns `NULL` for input that is not valid UTF-8, and
+what it returns must be released with `fts5icu_free`.
+
 ## Building
 
 ```sh
@@ -77,7 +96,9 @@ A finished library is 5.2–5.4 MiB, and 4.3 MiB of that is data:
 
 ICU's symbol renaming is left on, so everything it defines carries a version
 suffix (`u_foldCase_78`) and can't collide with another ICU in the process. The
-one symbol we export is `sqlite3_fts5icu_init`.
+only symbols we export are `sqlite3_fts5icu_init` and the four `fts5icu_*`
+transliteration entry points; the smoke test checks they are reachable and that
+nothing else is.
 
 ## Releasing
 

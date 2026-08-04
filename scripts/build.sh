@@ -146,18 +146,28 @@ fi
 OUT="$DIST/fts5_icu_$TARGET.$SHARED_EXT"
 mkdir -p "$DIST" "$TARGET_DIR/link"
 
+# What the library offers: the extension entry point SQLite calls, and the
+# transliteration a host binds directly when it needs the same folding outside
+# a query. Everything else, ICU included, stays inside.
+EXPORTED_SYMBOLS="sqlite3_fts5icu_init
+fts5icu_transliterator_open
+fts5icu_transliterator_close
+fts5icu_transliterate
+fts5icu_free"
+
 case "$SHARED_EXT" in
   dylib)
-    printf '%ssqlite3_fts5icu_init\n' "$EXPORT_SYMBOL_PREFIX" > "$TARGET_DIR/link/exports.sym"
+    echo "$EXPORTED_SYMBOLS" | sed "s/^/$EXPORT_SYMBOL_PREFIX/" > "$TARGET_DIR/link/exports.sym"
     EXPORT_LDFLAGS="-Wl,-exported_symbols_list,$TARGET_DIR/link/exports.sym"
     EXPORT_LDFLAGS="$EXPORT_LDFLAGS -install_name @rpath/$(basename "$OUT")"
     ;;
   so)
-    printf '{ global: sqlite3_fts5icu_init; local: *; };\n' > "$TARGET_DIR/link/exports.map"
+    printf '{ global: %s local: *; };\n' "$(echo "$EXPORTED_SYMBOLS" | sed 's/$/;/' | tr -d '\n')" \
+      > "$TARGET_DIR/link/exports.map"
     EXPORT_LDFLAGS="-Wl,--version-script=$TARGET_DIR/link/exports.map"
     ;;
   dll)
-    # The entry point carries __declspec(dllexport); nothing else should leave.
+    # Each exported function carries __declspec(dllexport); nothing else leaves.
     EXPORT_LDFLAGS="-Wl,--exclude-all-symbols"
     ;;
 esac
