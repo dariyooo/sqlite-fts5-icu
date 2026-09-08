@@ -72,7 +72,7 @@ toolchain_configure() {
       # install name to an absolute path, which Dart's asset bundling does.
       SHARED_LDFLAGS="-dynamiclib -Wl,-dead_strip -Wl,-headerpad_max_install_names"
       EXPORT_SYMBOL_PREFIX=_
-      SMOKE_LIBS="-lm"
+      TEST_LIBS="-lm"
       STRIP_FLAGS="-x"
       ;;
     linux_*|android_*)
@@ -80,7 +80,7 @@ toolchain_configure() {
       CXX_RUNTIME_LIBS="-lm"
       SHARED_LDFLAGS="-shared -Wl,--gc-sections"
       EXPORT_SYMBOL_PREFIX=
-      SMOKE_LIBS="-lm -ldl -lpthread"
+      TEST_LIBS="-lm -ldl -lpthread"
       STRIP_FLAGS="--strip-unneeded"
       ;;
     windows_*)
@@ -90,7 +90,7 @@ toolchain_configure() {
       CXX_RUNTIME_LIBS="-static"
       SHARED_LDFLAGS="-shared -Wl,--gc-sections"
       EXPORT_SYMBOL_PREFIX=
-      SMOKE_LIBS=""
+      TEST_LIBS=""
       STRIP_FLAGS="--strip-all"
       ;;
     *)
@@ -189,6 +189,6 @@ toolchain_configure() {
   : "${TARGET_STRIP:=strip}"
   export TARGET_TRIPLE TARGET_CC TARGET_CXX TARGET_AR TARGET_RANLIB TARGET_STRIP
   export TARGET_CFLAGS TARGET_LDFLAGS TARGET_CAN_RUN
-  export SHARED_EXT SHARED_LDFLAGS CXX_RUNTIME_LIBS EXPORT_SYMBOL_PREFIX SMOKE_LIBS
+  export SHARED_EXT SHARED_LDFLAGS CXX_RUNTIME_LIBS EXPORT_SYMBOL_PREFIX TEST_LIBS
   export STRIP_FLAGS ICU_LIB_UC ICU_LIB_I18N ICU_LIB_DATA
 }

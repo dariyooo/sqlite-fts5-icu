@@ -190,14 +190,14 @@ echo "==> linking $OUT"
   "$LIB_I18N" "$LIB_UC" "$LIB_DATA" \
   $CXX_RUNTIME_LIBS $TARGET_LDFLAGS
 
-# Runs before the smoke test so what gets tested is what gets shipped.
+# Runs before the tests so what gets tested is what gets shipped.
 "$TARGET_STRIP" $STRIP_FLAGS "$OUT"
 ls -l "$OUT"
 
 # --------------------------------------------------------------------- test
 
 if [[ "$TARGET_CAN_RUN" == yes ]]; then
-  echo "==> smoke test"
+  echo "==> tests"
   SQLITE_OBJ="$ROOT/build/sqlite3-$TARGET.o"
   if [[ ! -f "$SQLITE_OBJ" ]]; then
     # shellcheck disable=SC2086
@@ -206,13 +206,18 @@ if [[ "$TARGET_CAN_RUN" == yes ]]; then
   fi
   # shellcheck disable=SC2086
   "$TARGET_CC" -O1 $TARGET_CFLAGS -I"$SRC/include" \
-    -o "$TARGET_DIR/link/smoke" "$ROOT/test/smoke.c" "$SQLITE_OBJ" $SMOKE_LIBS $TARGET_LDFLAGS
+    -o "$TARGET_DIR/link/data_and_exports" "$ROOT/test/data_and_exports.c" "$SQLITE_OBJ" $TEST_LIBS $TARGET_LDFLAGS
+  # shellcheck disable=SC2086
+  "$TARGET_CC" -O1 $TARGET_CFLAGS -I"$SRC/include" \
+    -o "$TARGET_DIR/link/alternatives" "$ROOT/test/alternatives.c" "$SQLITE_OBJ" $TEST_LIBS $TARGET_LDFLAGS
   # A Windows binary cannot open the MSYS2 path this script is written in.
   if command -v cygpath > /dev/null; then
-    "$TARGET_DIR/link/smoke" "$(cygpath -w "$OUT")"
+    "$TARGET_DIR/link/data_and_exports" "$(cygpath -w "$OUT")"
+    "$TARGET_DIR/link/alternatives" "$(cygpath -w "$OUT")"
   else
-    "$TARGET_DIR/link/smoke" "$OUT"
+    "$TARGET_DIR/link/data_and_exports" "$OUT"
+    "$TARGET_DIR/link/alternatives" "$OUT"
   fi
 else
-  echo "==> smoke test skipped ($TARGET does not run here)"
+  echo "==> tests skipped ($TARGET does not run here)"
 fi

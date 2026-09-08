@@ -2,7 +2,7 @@
  * against every part of the ICU data package the build keeps, so a release is
  * never published from a build that was trimmed too far.
  *
- * Usage: smoke <path to libfts5_icu.{dylib,so,dll}>
+ * Usage: data_and_exports <path to libfts5_icu.{dylib,so,dll}>
  */
 
 #include <stdio.h>

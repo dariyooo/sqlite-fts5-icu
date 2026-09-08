@@ -65,7 +65,7 @@ unzip -qoj "$DL/sqlite-amalgamation.zip" \
   "$SQLITE_AMALGAMATION/sqlite3.h" "$SQLITE_AMALGAMATION/sqlite3ext.h" -d "$SRC/include"
 cp "$DL/fts5.h" "$SRC/include/fts5.h"
 
-# The smoke test needs a SQLite to link against.
+# The tests need a SQLite to link against.
 mkdir -p "$SRC/sqlite"
 unzip -qoj "$DL/sqlite-amalgamation.zip" "$SQLITE_AMALGAMATION/sqlite3.c" -d "$SRC/sqlite"
 

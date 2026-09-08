@@ -33,6 +33,9 @@ SQLITE_EXTENSION_INIT1
 #include "unicode/utrans.h"
 #include "unicode/utypes.h"
 
+/* Alternatives past this in one group are indexed as ordinary text. */
+#define ICU_MAX_ALT 64
+
 typedef struct IcuTokenizer IcuTokenizer;
 struct IcuTokenizer {
   UBreakIterator *pIter; /* Template, cloned per xTokenize call */
@@ -130,6 +133,166 @@ static int icuSpanIsWord(UBreakIterator *pIter) {
   return !(status >= UBRK_WORD_NONE && status < UBRK_WORD_NONE_LIMIT);
 }
 
+/* Emits every word ICU finds in aChar[iFrom..iTo), starting at *piColocated:
+ * when that is true the first token shares the previous token's position and
+ * the rest of the run follows it. Returns the number of tokens emitted. */
+static int icuEmitRange(IcuScratch *pScratch, UBreakIterator *pIter, void *pCtx, int iFrom,
+                        int iTo, int bColocate, int *pnEmitted,
+                        int (*xToken)(void *, int, const char *, int, int, int)) {
+  UErrorCode status = U_ZERO_ERROR;
+  int rc = SQLITE_OK;
+  int iStart;
+  int iEnd;
+  int nEmitted = 0;
+
+  if (iTo <= iFrom) return SQLITE_OK;
+
+  ubrk_setText(pIter, &pScratch->aChar[iFrom], iTo - iFrom, &status);
+  if (U_FAILURE(status)) return SQLITE_ERROR;
+
+  iStart = ubrk_first(pIter);
+  for (iEnd = ubrk_next(pIter); iEnd != UBRK_DONE; iStart = iEnd, iEnd = ubrk_next(pIter)) {
+    int nByte = 0;
+    int flags;
+
+    if (iEnd <= iStart || !icuSpanIsWord(pIter)) continue;
+
+    do {
+      status = U_ZERO_ERROR;
+      if (nByte > pScratch->nToken) {
+        char *zNew = (char *)sqlite3_realloc(pScratch->zToken, nByte);
+        if (!zNew) return SQLITE_NOMEM;
+        pScratch->zToken = zNew;
+        pScratch->nToken = nByte;
+      }
+      u_strToUTF8(pScratch->zToken, pScratch->nToken, &nByte, &pScratch->aChar[iFrom + iStart],
+                  iEnd - iStart, &status);
+    } while (nByte > pScratch->nToken);
+
+    flags = bColocate ? FTS5_TOKEN_COLOCATED : 0;
+    rc = xToken(pCtx, flags, pScratch->zToken, nByte, pScratch->aOffset[iFrom + iStart],
+                pScratch->aOffset[iFrom + iEnd]);
+    if (rc != SQLITE_OK) return rc;
+    nEmitted++;
+  }
+
+  *pnEmitted = nEmitted;
+  return SQLITE_OK;
+}
+
+/* Finds a `[[a||b]]` group starting at or after *piScan.
+ *
+ * A group needs both delimiters and at least one separator between them, so
+ * prose that merely quotes brackets is left as ordinary text. */
+static int icuFindGroup(const UChar *aChar, int nChar, int iScan, int *piOpen, int *piClose) {
+  int i;
+
+  for (i = iScan; i + 1 < nChar; i++) {
+    int j;
+    int bSep = 0;
+
+    if (aChar[i] != '[' || aChar[i + 1] != '[') continue;
+
+    for (j = i + 2; j + 1 < nChar; j++) {
+      if (aChar[j] == '|' && aChar[j + 1] == '|') {
+        bSep = 1;
+        continue;
+      }
+      if (aChar[j] == ']' && aChar[j + 1] == ']') {
+        if (!bSep) break;
+        *piOpen = i;
+        *piClose = j;
+        return 1;
+      }
+    }
+  }
+
+  return 0;
+}
+
+/* The end of the alternative starting at iAlt: the next `||` before iClose, or
+ * iClose when this is the last one. */
+static int icuAltEnd(const UChar *aChar, int iAlt, int iClose) {
+  int i = iAlt;
+
+  while (i + 1 < iClose && !(aChar[i] == '|' && aChar[i + 1] == '|')) {
+    i++;
+  }
+
+  return (i + 1 >= iClose) ? iClose : i;
+}
+
+/* How many tokens ICU finds in aChar[iFrom..iTo), without emitting any. */
+static int icuCountWords(IcuScratch *pScratch, UBreakIterator *pIter, int iFrom, int iTo) {
+  UErrorCode status = U_ZERO_ERROR;
+  int iStart;
+  int iEnd;
+  int nWord = 0;
+
+  if (iTo <= iFrom) return 0;
+
+  ubrk_setText(pIter, &pScratch->aChar[iFrom], iTo - iFrom, &status);
+  if (U_FAILURE(status)) return 0;
+
+  iStart = ubrk_first(pIter);
+  for (iEnd = ubrk_next(pIter); iEnd != UBRK_DONE; iStart = iEnd, iEnd = ubrk_next(pIter)) {
+    if (iEnd > iStart && icuSpanIsWord(pIter)) nWord++;
+  }
+
+  return nWord;
+}
+
+/* Writes aChar[iFrom..iTo) out as one token. */
+static int icuEmitToken(IcuScratch *pScratch, void *pCtx, int iFrom, int iTo, int iOffFrom,
+                        int iOffTo, int flags,
+                        int (*xToken)(void *, int, const char *, int, int, int)) {
+  UErrorCode status = U_ZERO_ERROR;
+  int nByte = 0;
+
+  do {
+    status = U_ZERO_ERROR;
+    if (nByte > pScratch->nToken) {
+      char *zNew = (char *)sqlite3_realloc(pScratch->zToken, nByte);
+      if (!zNew) return SQLITE_NOMEM;
+      pScratch->zToken = zNew;
+      pScratch->nToken = nByte;
+    }
+    u_strToUTF8(pScratch->zToken, pScratch->nToken, &nByte, &pScratch->aChar[iFrom], iTo - iFrom,
+                &status);
+  } while (nByte > pScratch->nToken);
+
+  return xToken(pCtx, flags, pScratch->zToken, nByte, pScratch->aOffset[iOffFrom],
+                pScratch->aOffset[iOffTo]);
+}
+
+/* Finds the iWord'th word inside aChar[iFrom..iTo), returning 0 when the range
+ * holds fewer words than that. */
+static int icuWordAt(IcuScratch *pScratch, UBreakIterator *pIter, int iFrom, int iTo, int iWord,
+                     int *piTokFrom, int *piTokTo) {
+  UErrorCode status = U_ZERO_ERROR;
+  int iStart;
+  int iEnd;
+  int nSeen = 0;
+
+  if (iTo <= iFrom) return 0;
+
+  ubrk_setText(pIter, &pScratch->aChar[iFrom], iTo - iFrom, &status);
+  if (U_FAILURE(status)) return 0;
+
+  iStart = ubrk_first(pIter);
+  for (iEnd = ubrk_next(pIter); iEnd != UBRK_DONE; iStart = iEnd, iEnd = ubrk_next(pIter)) {
+    if (iEnd <= iStart || !icuSpanIsWord(pIter)) continue;
+    if (nSeen == iWord) {
+      *piTokFrom = iFrom + iStart;
+      *piTokTo = iFrom + iEnd;
+      return 1;
+    }
+    nSeen++;
+  }
+
+  return 0;
+}
+
 static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, const char *pText,
                            int nText,
                            int (*xToken)(void *, int, const char *, int, int, int)) {
@@ -138,8 +301,10 @@ static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, con
   UErrorCode status = U_ZERO_ERROR;
   UBreakIterator *pIter = 0;
   int rc = SQLITE_OK;
-  int iStart;
-  int iEnd;
+  int iScan = 0;
+  int nEmitted = 0;
+  int aAltFrom[ICU_MAX_ALT];
+  int aAltTo[ICU_MAX_ALT];
   (void)flags;
 
   if (nText <= 0) return SQLITE_OK;
@@ -157,37 +322,97 @@ static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, con
     sqlite3_free(scratch.aChar);
     return SQLITE_ERROR;
   }
-  ubrk_setText(pIter, scratch.aChar, scratch.nChar, &status);
-  if (U_FAILURE(status)) {
-    ubrk_close(pIter);
-    sqlite3_free(scratch.aChar);
-    return SQLITE_ERROR;
-  }
 
-  iStart = ubrk_first(pIter);
-  for (iEnd = ubrk_next(pIter); iEnd != UBRK_DONE; iStart = iEnd, iEnd = ubrk_next(pIter)) {
-    int nByte = 0;
+  while (iScan < scratch.nChar) {
+    int iOpen = 0;
+    int iClose = 0;
+    int iAlt;
+    int iPos;
+    int nAlt;
+    int nLongest = 0;
+    int iSurfFrom;
+    int iSurfTo;
 
-    if (iEnd <= iStart || !icuSpanIsWord(pIter)) continue;
+    if (!icuFindGroup(scratch.aChar, scratch.nChar, iScan, &iOpen, &iClose)) break;
 
-    do {
-      status = U_ZERO_ERROR;
-      if (nByte > scratch.nToken) {
-        char *zNew = (char *)sqlite3_realloc(scratch.zToken, nByte);
-        if (!zNew) {
-          rc = SQLITE_NOMEM;
-          goto tokenize_out;
-        }
-        scratch.zToken = zNew;
-        scratch.nToken = nByte;
-      }
-      u_strToUTF8(scratch.zToken, scratch.nToken, &nByte, &scratch.aChar[iStart], iEnd - iStart,
-                  &status);
-    } while (nByte > scratch.nToken);
-
-    rc = xToken(pCtx, 0, scratch.zToken, nByte, scratch.aOffset[iStart], scratch.aOffset[iEnd]);
+    /* Everything before the group is ordinary text. */
+    rc = icuEmitRange(&scratch, pIter, pCtx, iScan, iOpen, 0, &nEmitted, xToken);
     if (rc != SQLITE_OK) goto tokenize_out;
+
+    /* A group is emitted position by position: the token each alternative has
+     * at that position goes out together, the first one advancing the counter
+     * and the rest colocating onto it. The group therefore costs as many
+     * positions as its longest alternative, and no later word collides with a
+     * colocated token. */
+    for (iAlt = iOpen + 2, nAlt = 0; iAlt <= iClose && nAlt < ICU_MAX_ALT; nAlt++) {
+      int iSep = icuAltEnd(scratch.aChar, iAlt, iClose);
+      int nRun = icuCountWords(&scratch, pIter, iAlt, iSep);
+
+      aAltFrom[nAlt] = iAlt;
+      aAltTo[nAlt] = iSep;
+      if (nRun > nLongest) nLongest = nRun;
+      iAlt = iSep + 2;
+    }
+
+    /* The written form is the first alternative, so every token in the group
+     * reports its span: a match on any of them marks the word as written. */
+    if (!icuWordAt(&scratch, pIter, aAltFrom[0], aAltTo[0], 0, &iSurfFrom, &iSurfTo)) {
+      iSurfFrom = aAltFrom[0];
+      iSurfTo = aAltTo[0];
+    } else {
+      int iLastFrom;
+      int iLastTo;
+      int iWord = 1;
+
+      while (icuWordAt(&scratch, pIter, aAltFrom[0], aAltTo[0], iWord, &iLastFrom, &iLastTo)) {
+        iSurfTo = iLastTo;
+        iWord++;
+      }
+    }
+
+    for (iPos = 0; iPos < nLongest; iPos++) {
+      int bFirst = 1;
+      int iThis;
+
+      for (iThis = 0; iThis < nAlt; iThis++) {
+        int iTokFrom;
+        int iTokTo;
+        int iSeen;
+        int bDuplicate = 0;
+
+        if (!icuWordAt(&scratch, pIter, aAltFrom[iThis], aAltTo[iThis], iPos, &iTokFrom, &iTokTo)) {
+          continue;
+        }
+
+        /* Alternatives of one word often share their leading tokens; indexing
+         * the same text twice at one position would double its term counts. */
+        for (iSeen = 0; iSeen < iThis && !bDuplicate; iSeen++) {
+          int iSeenFrom;
+          int iSeenTo;
+
+          if (!icuWordAt(&scratch, pIter, aAltFrom[iSeen], aAltTo[iSeen], iPos, &iSeenFrom,
+                         &iSeenTo)) {
+            continue;
+          }
+          bDuplicate = (iSeenTo - iSeenFrom) == (iTokTo - iTokFrom) &&
+                       u_memcmp(&scratch.aChar[iSeenFrom], &scratch.aChar[iTokFrom],
+                                iTokTo - iTokFrom) == 0;
+        }
+        if (bDuplicate) continue;
+
+        rc = icuEmitToken(&scratch, pCtx, iTokFrom, iTokTo, iSurfFrom, iSurfTo,
+                          bFirst ? 0 : FTS5_TOKEN_COLOCATED, xToken);
+        if (rc != SQLITE_OK) goto tokenize_out;
+        bFirst = 0;
+      }
+    }
+
+    iScan = iClose + 2;
   }
+
+  /* Whatever follows the last group -- or the whole input when it holds none. */
+  rc = icuEmitRange(&scratch, pIter, pCtx, iScan, scratch.nChar, 0, &nEmitted, xToken);
+  if (rc != SQLITE_OK) goto tokenize_out;
 
 tokenize_out:
   ubrk_close(pIter);
