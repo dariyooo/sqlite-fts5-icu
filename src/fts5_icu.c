@@ -25,6 +25,7 @@
 #include "sqlite3ext.h"
 SQLITE_EXTENSION_INIT1
 #include "fts5.h"
+#include "fts5_icu.h"
 #include "unicode/ubrk.h"
 #include "unicode/uchar.h"
 #include "unicode/ustring.h"
@@ -583,6 +584,61 @@ static char *icuCasefoldUtf8(const char *zText, int nText, int32_t *pnOut) {
   return zOut;
 }
 
+/* Word ranges for application text. The FTS path folds case and expands
+ * alternatives; neither transformation belongs in offsets into displayed text. */
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+int32_t fts5icu_word_ranges(const uint16_t *aText, int32_t nText, const char *zLocale,
+                           Fts5IcuWordRange **ppRanges) {
+  UErrorCode status = U_ZERO_ERROR;
+  UBreakIterator *pIter;
+  Fts5IcuWordRange *aRanges;
+  int32_t nWords = 0;
+  int32_t iStart;
+  int32_t iEnd;
+  int32_t iWord = 0;
+
+  if (!ppRanges) return -1;
+  *ppRanges = NULL;
+  if (nText < 0 || (!aText && nText > 0)) return -1;
+  if (nText == 0) return 0;
+
+  pIter = ubrk_open(UBRK_WORD, zLocale ? zLocale : "", (const UChar *)aText, nText, &status);
+  if (U_FAILURE(status) || !pIter) {
+    if (pIter) ubrk_close(pIter);
+    return -1;
+  }
+
+  for (iEnd = ubrk_next(pIter); iEnd != UBRK_DONE; iEnd = ubrk_next(pIter)) {
+    if (icuSpanIsWord(pIter)) nWords++;
+  }
+  if (nWords == 0) {
+    ubrk_close(pIter);
+    return 0;
+  }
+  if ((size_t)nWords > SIZE_MAX / sizeof(Fts5IcuWordRange)) {
+    ubrk_close(pIter);
+    return -1;
+  }
+  aRanges = (Fts5IcuWordRange *)malloc((size_t)nWords * sizeof(Fts5IcuWordRange));
+  if (!aRanges) {
+    ubrk_close(pIter);
+    return -1;
+  }
+
+  iStart = ubrk_first(pIter);
+  for (iEnd = ubrk_next(pIter); iEnd != UBRK_DONE; iStart = iEnd, iEnd = ubrk_next(pIter)) {
+    if (!icuSpanIsWord(pIter)) continue;
+    aRanges[iWord].start = iStart;
+    aRanges[iWord].end = iEnd;
+    iWord++;
+  }
+  ubrk_close(pIter);
+  *ppRanges = aRanges;
+  return nWords;
+}
+
 /* The same transliteration, reachable without a database.
  *
  * A caller outside SQL holds the compiled rules itself: opening them is the
@@ -618,7 +674,7 @@ char *fts5icu_transliterate(void *pTrans, const char *zText) {
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-void fts5icu_free(char *z) { free(z); }
+void fts5icu_free(void *p) { free(p); }
 
 /* icu_transliterate(text, rules) — applies an ICU transliterator rule string.
  *

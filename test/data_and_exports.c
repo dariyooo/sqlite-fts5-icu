@@ -92,7 +92,7 @@ static void checkNativeApi(const char *zPath) {
   void *(*xOpen)(const char *);
   void (*xClose)(void *);
   char *(*xTrans)(void *, const char *);
-  void (*xFree)(char *);
+  void (*xFree)(void *);
   void *pLib;
   void *pTrans;
   char *zOut;
@@ -106,7 +106,7 @@ static void checkNativeApi(const char *zPath) {
   xOpen = (void *(*)(const char *))dlSym(pLib, "fts5icu_transliterator_open");
   xClose = (void (*)(void *))dlSym(pLib, "fts5icu_transliterator_close");
   xTrans = (char *(*)(void *, const char *))dlSym(pLib, "fts5icu_transliterate");
-  xFree = (void (*)(char *))dlSym(pLib, "fts5icu_free");
+  xFree = (void (*)(void *))dlSym(pLib, "fts5icu_free");
   if (!xOpen || !xClose || !xTrans || !xFree) {
     fail("native api is exported", "4 symbols", "at least one missing");
     return;
