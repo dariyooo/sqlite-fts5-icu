@@ -38,6 +38,26 @@ SQLITE_EXTENSION_INIT1
 /* Alternatives past this in one group are indexed as ordinary text. */
 #define ICU_MAX_ALT 64
 
+/* The delimiters of an alternatives group, `[[a||b]]`, each two equal
+ * characters. Exported so whoever writes index text reads them from here. */
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+const char *const fts5icu_group_open = "[[";
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+const char *const fts5icu_group_separator = "||";
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+const char *const fts5icu_group_close = "]]";
+
+/* Whether aChar[i] and aChar[i + 1] are the two characters of [pair]. */
+static int icuPairAt(const UChar *aChar, int i, const char *pair) {
+  return aChar[i] == (UChar)pair[0] && aChar[i + 1] == (UChar)pair[1];
+}
+
 /* Scratch a tokenizer keeps between calls only while its input buffer holds at
  * most this many input bytes; a larger one is freed after the call. */
 #define ICU_SCRATCH_KEEP 16384
@@ -210,14 +230,14 @@ static int icuFindGroup(const UChar *aChar, int nChar, int iScan, int *piOpen, i
     int j;
     int bSep = 0;
 
-    if (aChar[i] != '[' || aChar[i + 1] != '[') continue;
+    if (!icuPairAt(aChar, i, fts5icu_group_open)) continue;
 
     for (j = i + 2; j + 1 < nChar; j++) {
-      if (aChar[j] == '|' && aChar[j + 1] == '|') {
+      if (icuPairAt(aChar, j, fts5icu_group_separator)) {
         bSep = 1;
         continue;
       }
-      if (aChar[j] == ']' && aChar[j + 1] == ']') {
+      if (icuPairAt(aChar, j, fts5icu_group_close)) {
         if (!bSep) break;
         *piOpen = i;
         *piClose = j;
@@ -234,7 +254,7 @@ static int icuFindGroup(const UChar *aChar, int nChar, int iScan, int *piOpen, i
 static int icuAltEnd(const UChar *aChar, int iAlt, int iClose) {
   int i = iAlt;
 
-  while (i + 1 < iClose && !(aChar[i] == '|' && aChar[i + 1] == '|')) {
+  while (i + 1 < iClose && !icuPairAt(aChar, i, fts5icu_group_separator)) {
     i++;
   }
 

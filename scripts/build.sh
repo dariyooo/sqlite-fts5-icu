@@ -154,7 +154,10 @@ fts5icu_transliterator_open
 fts5icu_transliterator_close
 fts5icu_transliterate
 fts5icu_word_ranges
-fts5icu_free"
+fts5icu_free
+fts5icu_group_open
+fts5icu_group_separator
+fts5icu_group_close"
 
 case "$SHARED_EXT" in
   dylib)

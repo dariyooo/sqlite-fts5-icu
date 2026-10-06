@@ -19,6 +19,11 @@ typedef struct Fts5IcuWordRange {
 int32_t fts5icu_word_ranges(const uint16_t *text, int32_t length, const char *locale,
                            Fts5IcuWordRange **ranges);
 
+/* The delimiters of an alternatives group in indexed text, `[[a||b]]`. */
+extern const char *const fts5icu_group_open;
+extern const char *const fts5icu_group_separator;
+extern const char *const fts5icu_group_close;
+
 void *fts5icu_transliterator_open(const char *rules);
 void fts5icu_transliterator_close(void *transliterator);
 char *fts5icu_transliterate(void *transliterator, const char *utf8);

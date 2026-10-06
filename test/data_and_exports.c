@@ -113,6 +113,19 @@ static void checkNativeApi(const char *zPath) {
   }
   pass("native api is exported");
 
+  {
+    const char *const *pOpen = (const char *const *)dlSym(pLib, "fts5icu_group_open");
+    const char *const *pSep = (const char *const *)dlSym(pLib, "fts5icu_group_separator");
+    const char *const *pClose = (const char *const *)dlSym(pLib, "fts5icu_group_close");
+    if (!pOpen || !pSep || !pClose) {
+      fail("group delimiters are exported", "3 symbols", "at least one missing");
+    } else if (strcmp(*pOpen, "[[") || strcmp(*pSep, "||") || strcmp(*pClose, "]]")) {
+      fail("group delimiters are exported", "[[ || ]]", *pOpen);
+    } else {
+      pass("group delimiters are exported");
+    }
+  }
+
   /* Nothing beyond the documented entry points leaves the library: not our own
    * helpers, and not ICU — whose symbols would show up unrenamed if the build
    * ever stopped renaming them. */
