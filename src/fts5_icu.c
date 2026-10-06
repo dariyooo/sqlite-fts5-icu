@@ -15,8 +15,9 @@
  *   - Spans ICU classifies as non-words (punctuation, symbols, whitespace) are
  *     skipped via the break rule status. fts3 skipped only whitespace, which
  *     leaves punctuation in the index.
- *   - The break iterator is opened once and cloned per call, so no rule data is
- *     reloaded per row and concurrent tokenization shares nothing mutable.
+ *   - The break iterator is opened once per tokenizer instance and reset per
+ *     call, so no rule data is reloaded per row. An instance belongs to one
+ *     table on one connection, which never tokenizes on two threads at once.
  */
 
 #include <stdlib.h>
@@ -37,21 +38,34 @@ SQLITE_EXTENSION_INIT1
 /* Alternatives past this in one group are indexed as ordinary text. */
 #define ICU_MAX_ALT 64
 
-typedef struct IcuTokenizer IcuTokenizer;
-struct IcuTokenizer {
-  UBreakIterator *pIter; /* Template, cloned per xTokenize call */
-  char zLocale[32];
-};
+/* Scratch a tokenizer keeps between calls only while its input buffer holds at
+ * most this many input bytes; a larger one is freed after the call. */
+#define ICU_SCRATCH_KEEP 16384
 
-/* Scratch for one xTokenize call. */
+/* Buffers for one xTokenize call, kept on the tokenizer between calls. */
 typedef struct IcuScratch IcuScratch;
 struct IcuScratch {
   UChar *aChar;   /* Case-folded UTF-16 copy of the input */
   int *aOffset;   /* aOffset[i] is the input byte offset of aChar[i] */
   int nChar;      /* UChar elements used in aChar */
+  int nAlloc;     /* Input bytes aChar and aOffset have room for */
   char *zToken;   /* Grown as needed to hold one token in UTF-8 */
   int nToken;
 };
+
+typedef struct IcuTokenizer IcuTokenizer;
+struct IcuTokenizer {
+  UBreakIterator *pIter; /* Reset by every xTokenize call */
+  IcuScratch scratch;
+  int bBusy;             /* An xTokenize call is using pIter and scratch */
+  char zLocale[32];
+};
+
+static void icuScratchFree(IcuScratch *pScratch) {
+  sqlite3_free(pScratch->aChar);
+  sqlite3_free(pScratch->zToken);
+  memset(pScratch, 0, sizeof(IcuScratch));
+}
 
 static int icuFts5Create(void *pCtx, const char **azArg, int nArg, Fts5Tokenizer **ppOut) {
   UErrorCode status = U_ZERO_ERROR;
@@ -82,6 +96,7 @@ static void icuFts5Delete(Fts5Tokenizer *pTokenizer) {
   IcuTokenizer *p = (IcuTokenizer *)pTokenizer;
   if (p) {
     if (p->pIter) ubrk_close(p->pIter);
+    icuScratchFree(&p->scratch);
     sqlite3_free(p);
   }
 }
@@ -95,9 +110,16 @@ static int icuFoldToUtf16(IcuScratch *pScratch, const char *pText, int nText) {
   int iOut = 0;
   UChar32 c;
 
-  pScratch->aChar = (UChar *)sqlite3_malloc64(
-      ((sqlite3_int64)nAlloc + 3) * sizeof(UChar) + ((sqlite3_int64)nAlloc + 2) * sizeof(int));
-  if (!pScratch->aChar) return SQLITE_NOMEM;
+  if (nAlloc > pScratch->nAlloc) {
+    sqlite3_free(pScratch->aChar);
+    pScratch->nAlloc = 0;
+    pScratch->aChar = (UChar *)sqlite3_malloc64(
+        ((sqlite3_int64)nAlloc + 3) * sizeof(UChar) + ((sqlite3_int64)nAlloc + 2) * sizeof(int));
+    if (!pScratch->aChar) return SQLITE_NOMEM;
+    pScratch->nAlloc = nAlloc;
+  }
+  /* U16_APPEND bounds-checks against the capacity, so it gets the buffer's. */
+  nAlloc = pScratch->nAlloc;
   pScratch->aOffset = (int *)&pScratch->aChar[nAlloc + 3];
 
   pScratch->aOffset[iOut] = iInput;
@@ -110,11 +132,7 @@ static int icuFoldToUtf16(IcuScratch *pScratch, const char *pText, int nText) {
     int isError = 0;
     c = u_foldCase(c, opt);
     U16_APPEND(pScratch->aChar, iOut, nAlloc, c, isError);
-    if (isError) {
-      sqlite3_free(pScratch->aChar);
-      pScratch->aChar = 0;
-      return SQLITE_ERROR;
-    }
+    if (isError) return SQLITE_ERROR;
     pScratch->aOffset[iOut] = iInput;
 
     if (iInput < nText) {
@@ -294,37 +312,19 @@ static int icuWordAt(IcuScratch *pScratch, UBreakIterator *pIter, int iFrom, int
   return 0;
 }
 
-static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, const char *pText,
-                           int nText,
-                           int (*xToken)(void *, int, const char *, int, int, int)) {
-  IcuTokenizer *p = (IcuTokenizer *)pTokenizer;
-  IcuScratch scratch;
-  UErrorCode status = U_ZERO_ERROR;
-  UBreakIterator *pIter = 0;
+/* Tokenizes pText with pIter, folding it into *pScratch. */
+static int icuTokenize(IcuScratch *pScratch, UBreakIterator *pIter, void *pCtx, const char *pText,
+                       int nText, int (*xToken)(void *, int, const char *, int, int, int)) {
   int rc = SQLITE_OK;
   int iScan = 0;
   int nEmitted = 0;
   int aAltFrom[ICU_MAX_ALT];
   int aAltTo[ICU_MAX_ALT];
-  (void)flags;
 
-  if (nText <= 0) return SQLITE_OK;
+  rc = icuFoldToUtf16(pScratch, pText, nText);
+  if (rc != SQLITE_OK || pScratch->nChar == 0) return rc;
 
-  memset(&scratch, 0, sizeof(scratch));
-  rc = icuFoldToUtf16(&scratch, pText, nText);
-  if (rc != SQLITE_OK) return rc;
-  if (scratch.nChar == 0) {
-    sqlite3_free(scratch.aChar);
-    return SQLITE_OK;
-  }
-
-  pIter = ubrk_clone(p->pIter, &status);
-  if (U_FAILURE(status) || pIter == NULL) {
-    sqlite3_free(scratch.aChar);
-    return SQLITE_ERROR;
-  }
-
-  while (iScan < scratch.nChar) {
+  while (iScan < pScratch->nChar) {
     int iOpen = 0;
     int iClose = 0;
     int iAlt;
@@ -334,11 +334,11 @@ static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, con
     int iSurfFrom;
     int iSurfTo;
 
-    if (!icuFindGroup(scratch.aChar, scratch.nChar, iScan, &iOpen, &iClose)) break;
+    if (!icuFindGroup(pScratch->aChar, pScratch->nChar, iScan, &iOpen, &iClose)) break;
 
     /* Everything before the group is ordinary text. */
-    rc = icuEmitRange(&scratch, pIter, pCtx, iScan, iOpen, 0, &nEmitted, xToken);
-    if (rc != SQLITE_OK) goto tokenize_out;
+    rc = icuEmitRange(pScratch, pIter, pCtx, iScan, iOpen, 0, &nEmitted, xToken);
+    if (rc != SQLITE_OK) return rc;
 
     /* A group is emitted position by position: the token each alternative has
      * at that position goes out together, the first one advancing the counter
@@ -346,8 +346,8 @@ static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, con
      * positions as its longest alternative, and no later word collides with a
      * colocated token. */
     for (iAlt = iOpen + 2, nAlt = 0; iAlt <= iClose && nAlt < ICU_MAX_ALT; nAlt++) {
-      int iSep = icuAltEnd(scratch.aChar, iAlt, iClose);
-      int nRun = icuCountWords(&scratch, pIter, iAlt, iSep);
+      int iSep = icuAltEnd(pScratch->aChar, iAlt, iClose);
+      int nRun = icuCountWords(pScratch, pIter, iAlt, iSep);
 
       aAltFrom[nAlt] = iAlt;
       aAltTo[nAlt] = iSep;
@@ -357,7 +357,7 @@ static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, con
 
     /* The written form is the first alternative, so every token in the group
      * reports its span: a match on any of them marks the word as written. */
-    if (!icuWordAt(&scratch, pIter, aAltFrom[0], aAltTo[0], 0, &iSurfFrom, &iSurfTo)) {
+    if (!icuWordAt(pScratch, pIter, aAltFrom[0], aAltTo[0], 0, &iSurfFrom, &iSurfTo)) {
       iSurfFrom = aAltFrom[0];
       iSurfTo = aAltTo[0];
     } else {
@@ -365,7 +365,7 @@ static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, con
       int iLastTo;
       int iWord = 1;
 
-      while (icuWordAt(&scratch, pIter, aAltFrom[0], aAltTo[0], iWord, &iLastFrom, &iLastTo)) {
+      while (icuWordAt(pScratch, pIter, aAltFrom[0], aAltTo[0], iWord, &iLastFrom, &iLastTo)) {
         iSurfTo = iLastTo;
         iWord++;
       }
@@ -381,7 +381,8 @@ static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, con
         int iSeen;
         int bDuplicate = 0;
 
-        if (!icuWordAt(&scratch, pIter, aAltFrom[iThis], aAltTo[iThis], iPos, &iTokFrom, &iTokTo)) {
+        if (!icuWordAt(pScratch, pIter, aAltFrom[iThis], aAltTo[iThis], iPos, &iTokFrom,
+                       &iTokTo)) {
           continue;
         }
 
@@ -391,19 +392,19 @@ static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, con
           int iSeenFrom;
           int iSeenTo;
 
-          if (!icuWordAt(&scratch, pIter, aAltFrom[iSeen], aAltTo[iSeen], iPos, &iSeenFrom,
+          if (!icuWordAt(pScratch, pIter, aAltFrom[iSeen], aAltTo[iSeen], iPos, &iSeenFrom,
                          &iSeenTo)) {
             continue;
           }
           bDuplicate = (iSeenTo - iSeenFrom) == (iTokTo - iTokFrom) &&
-                       u_memcmp(&scratch.aChar[iSeenFrom], &scratch.aChar[iTokFrom],
+                       u_memcmp(&pScratch->aChar[iSeenFrom], &pScratch->aChar[iTokFrom],
                                 iTokTo - iTokFrom) == 0;
         }
         if (bDuplicate) continue;
 
-        rc = icuEmitToken(&scratch, pCtx, iTokFrom, iTokTo, iSurfFrom, iSurfTo,
+        rc = icuEmitToken(pScratch, pCtx, iTokFrom, iTokTo, iSurfFrom, iSurfTo,
                           bFirst ? 0 : FTS5_TOKEN_COLOCATED, xToken);
-        if (rc != SQLITE_OK) goto tokenize_out;
+        if (rc != SQLITE_OK) return rc;
         bFirst = 0;
       }
     }
@@ -412,13 +413,36 @@ static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, con
   }
 
   /* Whatever follows the last group -- or the whole input when it holds none. */
-  rc = icuEmitRange(&scratch, pIter, pCtx, iScan, scratch.nChar, 0, &nEmitted, xToken);
-  if (rc != SQLITE_OK) goto tokenize_out;
+  return icuEmitRange(pScratch, pIter, pCtx, iScan, pScratch->nChar, 0, &nEmitted, xToken);
+}
 
-tokenize_out:
-  ubrk_close(pIter);
-  sqlite3_free(scratch.zToken);
-  sqlite3_free(scratch.aChar);
+static int icuFts5Tokenize(Fts5Tokenizer *pTokenizer, void *pCtx, int flags, const char *pText,
+                           int nText,
+                           int (*xToken)(void *, int, const char *, int, int, int)) {
+  IcuTokenizer *p = (IcuTokenizer *)pTokenizer;
+  int rc;
+  (void)flags;
+
+  if (nText <= 0) return SQLITE_OK;
+
+  /* A call made from inside another one on this instance, e.g. by an xToken
+   * callback, must not reset the iterator under it, so it gets its own. */
+  if (p->bBusy) {
+    UErrorCode status = U_ZERO_ERROR;
+    IcuScratch scratch;
+    UBreakIterator *pIter = ubrk_clone(p->pIter, &status);
+    if (U_FAILURE(status) || pIter == NULL) return SQLITE_ERROR;
+    memset(&scratch, 0, sizeof(scratch));
+    rc = icuTokenize(&scratch, pIter, pCtx, pText, nText, xToken);
+    ubrk_close(pIter);
+    icuScratchFree(&scratch);
+    return rc;
+  }
+
+  p->bBusy = 1;
+  rc = icuTokenize(&p->scratch, p->pIter, pCtx, pText, nText, xToken);
+  p->bBusy = 0;
+  if (p->scratch.nAlloc > ICU_SCRATCH_KEEP) icuScratchFree(&p->scratch);
   return rc;
 }
 
