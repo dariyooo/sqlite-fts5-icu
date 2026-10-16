@@ -19,10 +19,11 @@
 #define UCONFIG_NO_TRANSLITERATION 0
 #define UCONFIG_NO_NORMALIZATION 0
 
-/* Charset conversion. The tokenizer converts UTF-8 to UTF-16 through
- * u_strFromUTF8, which is not part of the converter framework, so the whole
- * legacy converter set and its ~4.9 MiB of mapping tables go. */
-#define UCONFIG_NO_CONVERSION 1
+/* Charset conversion. The converter framework stays for icu_scsu_encode() and
+ * icu_scsu_decode(); SCSU is algorithmic and needs no data. The legacy
+ * converter set and its ~4.9 MiB of mapping tables go. The tokenizer converts
+ * UTF-8 to UTF-16 through u_strFromUTF8, which needs neither. */
+#define UCONFIG_NO_CONVERSION 0
 #define UCONFIG_NO_LEGACY_CONVERSION 1
 
 /* Locale-sensitive comparison. Search ordering is bm25 and the ranking tuple,

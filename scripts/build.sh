@@ -176,12 +176,17 @@ case "$SHARED_EXT" in
     ;;
 esac
 
-echo "==> compiling the tokenizer"
-# shellcheck disable=SC2086
-"$TARGET_CC" \
-  -Os -fPIC -DU_STATIC_IMPLEMENTATION $TARGET_CFLAGS \
-  -I"$SRC/include" -I"$ICU_INST/include" \
-  -c "$ROOT/src/fts5_icu.c" -o "$TARGET_DIR/link/fts5_icu.o"
+echo "==> compiling the extension"
+OBJS=()
+for source in "$ROOT"/src/*.c; do
+  obj="$TARGET_DIR/link/$(basename "${source%.c}").o"
+  # shellcheck disable=SC2086
+  "$TARGET_CC" \
+    -Os -fPIC -DU_STATIC_IMPLEMENTATION $TARGET_CFLAGS \
+    -I"$SRC/include" -I"$ICU_INST/include" \
+    -c "$source" -o "$obj"
+  OBJS+=("$obj")
+done
 
 echo "==> linking $OUT"
 # ICU is C++, so the link goes through the C++ driver: it knows which standard
@@ -190,7 +195,7 @@ echo "==> linking $OUT"
 # shellcheck disable=SC2086
 "$TARGET_CXX" \
   $TARGET_CFLAGS $SHARED_LDFLAGS $EXPORT_LDFLAGS \
-  -o "$OUT" "$TARGET_DIR/link/fts5_icu.o" \
+  -o "$OUT" "${OBJS[@]}" \
   "$LIB_I18N" "$LIB_UC" "$LIB_DATA" \
   $CXX_RUNTIME_LIBS $TARGET_LDFLAGS
 
@@ -217,15 +222,20 @@ if [[ "$TARGET_CAN_RUN" == yes ]]; then
   # shellcheck disable=SC2086
   "$TARGET_CC" -O1 $TARGET_CFLAGS -I"$ROOT/src" \
     -o "$TARGET_DIR/link/word_ranges" "$ROOT/test/word_ranges.c" $TEST_LIBS $TARGET_LDFLAGS
+  # shellcheck disable=SC2086
+  "$TARGET_CC" -O1 $TARGET_CFLAGS -I"$SRC/include" \
+    -o "$TARGET_DIR/link/scsu" "$ROOT/test/scsu.c" "$SQLITE_OBJ" $TEST_LIBS $TARGET_LDFLAGS
   # A Windows binary cannot open the MSYS2 path this script is written in.
   if command -v cygpath > /dev/null; then
     "$TARGET_DIR/link/data_and_exports" "$(cygpath -w "$OUT")"
     "$TARGET_DIR/link/alternatives" "$(cygpath -w "$OUT")"
     "$TARGET_DIR/link/word_ranges" "$(cygpath -w "$OUT")"
+    "$TARGET_DIR/link/scsu" "$(cygpath -w "$OUT")"
   else
     "$TARGET_DIR/link/data_and_exports" "$OUT"
     "$TARGET_DIR/link/alternatives" "$OUT"
     "$TARGET_DIR/link/word_ranges" "$OUT"
+    "$TARGET_DIR/link/scsu" "$OUT"
   fi
 else
   echo "==> tests skipped ($TARGET does not run here)"

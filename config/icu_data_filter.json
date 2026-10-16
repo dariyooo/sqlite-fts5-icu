@@ -54,8 +54,8 @@
       "includelist": ["icustd", "icuver", "likelySubtags"]
     },
 
-// Removed by UCONFIG_NO_CONVERSION at compile time; excluded here so the
-// ~4.9 MiB of mapping tables leave the package too.
+// Removed by UCONFIG_NO_LEGACY_CONVERSION at compile time; excluded here so
+// the ~4.9 MiB of mapping tables leave the package too. SCSU needs none.
     "conversion_mappings": { "filterType": "exclude" },
 
     "coll_tree": { "filterType": "exclude" },

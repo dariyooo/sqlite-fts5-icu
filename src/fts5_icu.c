@@ -1,5 +1,6 @@
-/* An fts5 tokenizer that segments with ICU's word BreakIterator, plus the
- * `icu_transliterate()` and `icu_casefold()` scalar functions.
+/* An fts5 tokenizer that segments with ICU's word BreakIterator, and the
+ * extension's entry point, which also registers the scalar functions in
+ * transliterate.c, casefold.c and scsu.c.
  *
  * The tokenizer is a port of SQLite's own fts3 ICU tokenizer (ext/fts3/fts3_icu.c)
  * to the fts5 tokenizer API. fts3 pulls one token at a time through a cursor;
@@ -27,12 +28,12 @@
 SQLITE_EXTENSION_INIT1
 #include "fts5.h"
 #include "fts5_icu.h"
+#include "fts5_icu_internal.h"
 #include "unicode/ubrk.h"
 #include "unicode/uchar.h"
 #include "unicode/ustring.h"
 #include "unicode/utf16.h"
 #include "unicode/utf8.h"
-#include "unicode/utrans.h"
 #include "unicode/utypes.h"
 
 /* Alternatives past this in one group are indexed as ordinary text. */
@@ -472,162 +473,6 @@ static const fts5_tokenizer icuFts5Tokenizer = {
     icuFts5Tokenize,
 };
 
-/* Compiles zRules, a UTF-8 transliterator rule string. Returns 0 if ICU rejects
- * it. */
-static UTransliterator *icuTransliteratorOpen(const char *zRules, int nRules) {
-  UErrorCode status = U_ZERO_ERROR;
-  UTransliterator *pTrans = 0;
-  UChar *aRules;
-  int32_t nRulesU16 = 0;
-
-  if (zRules == 0) return 0;
-  aRules = (UChar *)malloc(((size_t)nRules + 1) * sizeof(UChar));
-  if (!aRules) return 0;
-
-  u_strFromUTF8(aRules, nRules + 1, &nRulesU16, zRules, nRules, &status);
-  if (U_SUCCESS(status)) {
-    pTrans = utrans_openU(u"dalang", -1, UTRANS_FORWARD, aRules, nRulesU16, NULL, &status);
-  }
-  free(aRules);
-  return U_FAILURE(status) ? 0 : pTrans;
-}
-
-/* Applies pTrans to nText bytes of UTF-8. Returns a NUL-terminated string the
- * caller frees, and writes its length to pnOut. Returns 0 if the text is not
- * valid UTF-8 or an allocation fails, which callers report as "leave the input
- * alone" rather than as an error. */
-static char *icuTransliterateUtf8(UTransliterator *pTrans, const char *zText, int nText,
-                                  int32_t *pnOut) {
-  UErrorCode status;
-  UChar *aBuf = 0;
-  int32_t nBuf = nText + 32;
-  int32_t nUsed = 0;
-  int32_t limit;
-  char *zOut = 0;
-  int32_t nOut = 0;
-
-  /* Transliteration can lengthen the text, so the buffer starts with slack and
-   * grows if ICU reports it was too small. */
-  while (1) {
-    UChar *aNew = (UChar *)realloc(aBuf, (size_t)nBuf * sizeof(UChar));
-    if (!aNew) {
-      free(aBuf);
-      return 0;
-    }
-    aBuf = aNew;
-
-    status = U_ZERO_ERROR;
-    u_strFromUTF8(aBuf, nBuf, &nUsed, zText, nText, &status);
-    if (status == U_BUFFER_OVERFLOW_ERROR) {
-      nBuf = nUsed + 1;
-      continue;
-    }
-    if (U_FAILURE(status)) {
-      free(aBuf);
-      return 0;
-    }
-
-    limit = nUsed;
-    status = U_ZERO_ERROR;
-    utrans_transUChars(pTrans, aBuf, &nUsed, nBuf, 0, &limit, &status);
-    if (status == U_BUFFER_OVERFLOW_ERROR) {
-      nBuf = nUsed + 32;
-      continue;
-    }
-    if (U_FAILURE(status)) {
-      free(aBuf);
-      return 0;
-    }
-    break;
-  }
-
-  status = U_ZERO_ERROR;
-  u_strToUTF8(NULL, 0, &nOut, aBuf, nUsed, &status);
-  status = U_ZERO_ERROR;
-  zOut = (char *)malloc((size_t)nOut + 1);
-  if (!zOut) {
-    free(aBuf);
-    return 0;
-  }
-  u_strToUTF8(zOut, nOut + 1, &nOut, aBuf, nUsed, &status);
-  free(aBuf);
-  if (U_FAILURE(status)) {
-    free(zOut);
-    return 0;
-  }
-  *pnOut = nOut;
-  return zOut;
-}
-
-/* Case-folds UTF-8 text, returning malloc'd UTF-8 the caller frees. Returns 0
- * on failure so the caller can fall back to the input unchanged.
- *
- * Folds one code point at a time with u_foldCase, which is what the tokenizer
- * above does to build the index. The classification this feeds decides whether
- * an already-matched row was an exact hit or a prefix one, so it has to agree
- * with the fold fts5 matched under; u_strFoldCase would not, because it also
- * applies the multi-character mappings the tokenizer never sees.
- *
- * A folded code point is written out fresh rather than over the one it
- * replaces: the two do not always occupy the same number of bytes, and
- * rewriting UTF-8 in place would leave the tail of the old encoding behind. */
-static char *icuCasefoldUtf8(const char *zText, int nText, int32_t *pnOut) {
-  const int32_t opt = U_FOLD_CASE_DEFAULT;
-  char *zOut;
-  int32_t nAlloc = nText + 16;
-  int32_t iIn = 0;
-  int32_t iOut = 0;
-
-  zOut = (char *)malloc((size_t)nAlloc + 1);
-  if (!zOut) return 0;
-
-  while (iIn < nText) {
-    int32_t iStart = iIn;
-    int isError = 0;
-    UChar32 c;
-
-    U8_NEXT(zText, iIn, nText, c);
-
-    /* Text SQLite accepted but ICU cannot decode: pass the bytes through
-     * untouched. One unreadable row must not fail the query around it. */
-    if (c < 0) {
-      int32_t nRaw = iIn - iStart;
-      if (iOut + nRaw > nAlloc) {
-        char *zNew = (char *)realloc(zOut, (size_t)(nAlloc = nAlloc * 2 + nRaw) + 1);
-        if (!zNew) {
-          free(zOut);
-          return 0;
-        }
-        zOut = zNew;
-      }
-      memcpy(&zOut[iOut], &zText[iStart], (size_t)nRaw);
-      iOut += nRaw;
-      continue;
-    }
-
-    /* U8_APPEND writes at most 4 bytes. */
-    if (iOut + 4 > nAlloc) {
-      char *zNew = (char *)realloc(zOut, (size_t)(nAlloc = nAlloc * 2) + 1);
-      if (!zNew) {
-        free(zOut);
-        return 0;
-      }
-      zOut = zNew;
-    }
-
-    c = u_foldCase(c, opt);
-    U8_APPEND(zOut, iOut, nAlloc, c, isError);
-    if (isError) {
-      free(zOut);
-      return 0;
-    }
-  }
-
-  zOut[iOut] = 0;
-  *pnOut = iOut;
-  return zOut;
-}
-
 /* Word ranges for application text. The FTS path folds case and expands
  * alternatives; neither transformation belongs in offsets into displayed text. */
 #ifdef _WIN32
@@ -683,113 +528,10 @@ int32_t fts5icu_word_ranges(const uint16_t *aText, int32_t nText, const char *zL
   return nWords;
 }
 
-/* The same transliteration, reachable without a database.
- *
- * A caller outside SQL holds the compiled rules itself: opening them is the
- * expensive half, and a handle it owns needs no shared cache and no lock. One
- * handle belongs to one thread at a time — ICU transliterators are not
- * re-entrant. */
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-void *fts5icu_transliterator_open(const char *zRules) {
-  if (zRules == 0) return 0;
-  return icuTransliteratorOpen(zRules, (int)strlen(zRules));
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-void fts5icu_transliterator_close(void *pTrans) {
-  if (pTrans) utrans_close((UTransliterator *)pTrans);
-}
-
-/* Returns the transliterated text, or 0 when the input is not valid UTF-8 —
- * free it with fts5icu_free. */
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-char *fts5icu_transliterate(void *pTrans, const char *zText) {
-  int32_t nOut = 0;
-  if (pTrans == 0 || zText == 0) return 0;
-  return icuTransliterateUtf8((UTransliterator *)pTrans, zText, (int)strlen(zText), &nOut);
-}
-
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
 void fts5icu_free(void *p) { free(p); }
-
-/* icu_transliterate(text, rules) — applies an ICU transliterator rule string.
- *
- * The compiled transliterator is kept as auxiliary data on the rules argument,
- * so a statement with a constant rule string compiles the rules once no matter
- * how many rows it touches. */
-static void icuTransliterateDestroy(void *pTrans) { utrans_close((UTransliterator *)pTrans); }
-
-static void icuTransliterateFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-  UTransliterator *pTrans;
-  const char *zText;
-  int nText;
-  char *zOut;
-  int32_t nOut = 0;
-  (void)argc;
-
-  if (sqlite3_value_type(argv[0]) == SQLITE_NULL) return;
-  zText = (const char *)sqlite3_value_text(argv[0]);
-  nText = sqlite3_value_bytes(argv[0]);
-  if (zText == 0) return;
-
-  pTrans = (UTransliterator *)sqlite3_get_auxdata(ctx, 1);
-  if (pTrans == 0) {
-    const char *zRules = (const char *)sqlite3_value_text(argv[1]);
-    if (zRules == 0) {
-      sqlite3_result_value(ctx, argv[0]);
-      return;
-    }
-    pTrans = icuTransliteratorOpen(zRules, sqlite3_value_bytes(argv[1]));
-    if (pTrans == 0) {
-      sqlite3_result_error(ctx, "icu_transliterate: invalid rules", -1);
-      return;
-    }
-    sqlite3_set_auxdata(ctx, 1, pTrans, icuTransliterateDestroy);
-    if (sqlite3_get_auxdata(ctx, 1) == 0) {
-      /* auxdata was not retained; the destructor already ran. */
-      sqlite3_result_error_nomem(ctx);
-      return;
-    }
-  }
-
-  zOut = icuTransliterateUtf8(pTrans, zText, nText, &nOut);
-  if (zOut == 0) {
-    sqlite3_result_value(ctx, argv[0]);
-    return;
-  }
-  sqlite3_result_text(ctx, zOut, nOut, free);
-}
-
-/* icu_casefold(X) -> X case-folded, for case-insensitive comparison of text
- * SQLite's own lower() only handles as ASCII. Text that cannot be folded is
- * returned unchanged rather than erroring, so one bad row cannot fail a query. */
-static void icuCasefoldFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-  const char *zText;
-  int nText;
-  char *zOut;
-  int32_t nOut = 0;
-  (void)argc;
-
-  if (sqlite3_value_type(argv[0]) == SQLITE_NULL) return;
-  zText = (const char *)sqlite3_value_text(argv[0]);
-  nText = sqlite3_value_bytes(argv[0]);
-  if (zText == 0) return;
-
-  zOut = icuCasefoldUtf8(zText, nText, &nOut);
-  if (zOut == 0) {
-    sqlite3_result_value(ctx, argv[0]);
-    return;
-  }
-  sqlite3_result_text(ctx, zOut, nOut, free);
-}
 
 /* Looks up the fts5 API through the documented pointer-passing shim. */
 static fts5_api *icuFts5Api(sqlite3 *db) {
@@ -812,14 +554,13 @@ int sqlite3_fts5icu_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routine
   SQLITE_EXTENSION_INIT2(pRoutines);
   (void)pzErrMsg;
 
-  rc = sqlite3_create_function(db, "icu_transliterate", 2,
-                               SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, 0,
-                               icuTransliterateFunc, 0, 0);
+  rc = fts5icuRegisterTransliterate(db);
   if (rc != SQLITE_OK) return rc;
 
-  rc = sqlite3_create_function(db, "icu_casefold", 1,
-                               SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, 0,
-                               icuCasefoldFunc, 0, 0);
+  rc = fts5icuRegisterCasefold(db);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = fts5icuRegisterScsu(db);
   if (rc != SQLITE_OK) return rc;
 
   pApi = icuFts5Api(db);

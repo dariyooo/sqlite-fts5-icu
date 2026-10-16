@@ -47,6 +47,18 @@ SELECT icu_transliterate('ＱＡ１２', '::NFKC;');           -- QA12
 
 Invalid rules raise an SQL error. A constant rule string is cached through SQLite's statement auxiliary data. A `NULL` text argument returns `NULL`; `NULL` rules return the input unchanged. If applying the transform fails, the SQL function returns the original input.
 
+### SCSU compression
+
+```sql
+SELECT typeof(icu_scsu_encode('これはテストですよ')); -- blob: 12 bytes instead of 27
+SELECT typeof(icu_scsu_encode('hello'));              -- text: SCSU would not be shorter
+SELECT icu_scsu_decode(icu_scsu_encode('これはテストですよ')); -- これはテストですよ
+```
+
+`icu_scsu_encode` stores text as SCSU ([Unicode Technical Standard #6](https://www.unicode.org/reports/tr6/)) in a BLOB when that is shorter than its UTF-8, and returns it unchanged otherwise. Japanese and other non-Latin scripts take one or two bytes per character instead of three. `icu_scsu_decode` returns the text a BLOB from `icu_scsu_encode` holds and passes every other value through, so a column can hold both kinds. Each value is encoded on its own and decodes on its own.
+
+Text that is not valid UTF-8 stays text. Decoding a BLOB that is not SCSU raises an SQL error. SQL `NULL` remains `NULL`.
+
 ## Native API
 
 Include [`src/fts5_icu.h`](src/fts5_icu.h), or bind the exported C functions through FFI. These functions work without a database connection or a call to `sqlite3_fts5icu_init`.
