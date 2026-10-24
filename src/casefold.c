@@ -101,6 +101,18 @@ static void icuCasefoldFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv
   sqlite3_result_text(ctx, zOut, nOut, free);
 }
 
+/* zText case-folded exactly as icu_casefold() folds it, as a new UTF-8 string;
+ * free it with fts5icu_free. NULL for NULL input or on allocation failure.
+ * Bytes that are not valid UTF-8 pass through unchanged. */
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+char *fts5icu_casefold(const char *zText) {
+  int32_t nOut = 0;
+  if (zText == 0) return 0;
+  return icuCasefoldUtf8(zText, (int)strlen(zText), &nOut);
+}
+
 int fts5icuRegisterCasefold(sqlite3 *db) {
   return sqlite3_create_function(db, "icu_casefold", 1,
                                  SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, 0,

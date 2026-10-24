@@ -91,6 +91,15 @@ fts5icu_free(ranges);
 
 The API returns positions in the displayed text. Language choice, tap behavior and search modes belong to the caller. ICU's word-boundary rules are documented in the [ICU user guide](https://unicode-org.github.io/icu/userguide/boundaryanalysis/).
 
+### Case folding
+
+```c
+char *fts5icu_casefold(const char *utf8);
+void fts5icu_free(void *result);
+```
+
+Folds a NUL-terminated UTF-8 string exactly as `icu_casefold()` does, so text folded outside a query compares equal to text folded in SQL. Returns a newly allocated UTF-8 string, or `NULL` for `NULL` input or on allocation failure. Bytes that are not valid UTF-8 pass through unchanged. Free each result with `fts5icu_free()`. Calls share no state and can run concurrently.
+
 ### Transliteration
 
 ```c

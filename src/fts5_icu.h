@@ -27,6 +27,10 @@ extern const char *const fts5icu_group_close;
 void *fts5icu_transliterator_open(const char *rules);
 void fts5icu_transliterator_close(void *transliterator);
 char *fts5icu_transliterate(void *transliterator, const char *utf8);
+
+/* utf8 case-folded as icu_casefold() folds it. Free with fts5icu_free(). */
+char *fts5icu_casefold(const char *utf8);
+
 void fts5icu_free(void *result);
 
 #ifdef __cplusplus

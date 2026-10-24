@@ -130,6 +130,7 @@ static void checkNativeApi(const char *zPath) {
    * helpers, and not ICU — whose symbols would show up unrenamed if the build
    * ever stopped renaming them. */
   if (dlSym(pLib, "icuTransliterateUtf8") || dlSym(pLib, "icuTransliteratorOpen") ||
+      dlSym(pLib, "icuCasefoldUtf8") ||
       dlSym(pLib, "utrans_openU") || dlSym(pLib, "u_foldCase")) {
     fail("nothing else is exported", "no internal symbols", "at least one is reachable");
   } else {
@@ -166,6 +167,62 @@ static void checkNativeApi(const char *zPath) {
   xFree(zOut);
 
   xClose(pTrans);
+}
+
+/* The case folding a host binds directly must agree with icu_casefold() on
+ * every string, or text folded outside a query stops matching text folded in
+ * one. The samples are the ones where folding rules differ between libraries. */
+static void checkNativeCasefold(sqlite3 *db, const char *zPath) {
+  static const char *const azSample[] = {
+      "ÉCOLE", "Straße", "ẞ", "ΣΊΣΥΦΟΣ", "ς", "İstanbul", "ı", "ﬃ", "ǅ", "Ꭰꭰ", "ＡＢＣ",
+      "K", "µ", "ᾈ", "日本語", "ｺｰﾋｰ", "",
+  };
+  char *(*xFold)(const char *);
+  void (*xFree)(void *);
+  void *pLib = dlOpen(zPath);
+  int nMismatch = 0;
+  size_t i;
+
+  xFold = pLib ? (char *(*)(const char *))dlSym(pLib, "fts5icu_casefold") : 0;
+  xFree = pLib ? (void (*)(void *))dlSym(pLib, "fts5icu_free") : 0;
+  if (!xFold || !xFree) {
+    fail("native casefold is exported", "fts5icu_casefold", "(missing)");
+    return;
+  }
+  pass("native casefold is exported");
+
+  for (i = 0; i < sizeof(azSample) / sizeof(azSample[0]); i++) {
+    sqlite3_stmt *pStmt = 0;
+    const char *zSql;
+    char *zNative = xFold(azSample[i]);
+    sqlite3_prepare_v2(db, "SELECT icu_casefold(?1)", -1, &pStmt, 0);
+    sqlite3_bind_text(pStmt, 1, azSample[i], -1, SQLITE_STATIC);
+    sqlite3_step(pStmt);
+    zSql = (const char *)sqlite3_column_text(pStmt, 0);
+    if (!zNative || !zSql || strcmp(zNative, zSql) != 0) {
+      fail(azSample[i], zSql, zNative);
+      nMismatch++;
+    }
+    sqlite3_finalize(pStmt);
+    xFree(zNative);
+  }
+  if (nMismatch == 0) pass("native casefold equals icu_casefold()");
+
+  {
+    char *zOut = xFold("ÉCOLE Straße");
+    if (zOut && strcmp(zOut, "école straße") == 0) {
+      pass("native casefold folds one code point at a time");
+    } else {
+      fail("native casefold folds one code point at a time", "école straße", zOut);
+    }
+    xFree(zOut);
+  }
+
+  if (xFold(0) != 0) {
+    fail("native casefold of NULL", "(null)", "a string");
+  } else {
+    pass("native casefold of NULL");
+  }
 }
 
 int main(int argc, char **argv) {
@@ -233,6 +290,7 @@ int main(int argc, char **argv) {
   }
 
   checkNativeApi(argv[1]);
+  checkNativeCasefold(db, argv[1]);
 
   sqlite3_close(db);
   if (gFailures) {
