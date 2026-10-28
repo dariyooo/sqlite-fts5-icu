@@ -118,84 +118,202 @@ static void icuRangesJoin(IcuRanges *p) {
   p->n = o + 1;
 }
 
-/* The word spans ICU finds in the folded text, as pairs of folded offsets.
- * Returns the number of words, or -1 on failure. */
-static int32_t icuWords(const IcuFolded *p, const char *zLocale, int32_t **paWords) {
+/* A word position of a text: the words standing at it, one in ordinary text
+ * and one per alternative inside a `[[a||b]]` group, and the span a match
+ * there covers, the written form's in a group, as the tokenizer reports it. */
+typedef struct IcuPosition {
+  int32_t iWord; /* first of its words in aWord */
+  int32_t nWord;
+  int32_t from; /* folded offsets of the span */
+  int32_t to;
+} IcuPosition;
+
+typedef struct IcuPositions {
+  int32_t *aWord; /* folded from, to pairs */
+  int32_t nWord;
+  IcuPosition *aPos;
+  int32_t nPos;
+} IcuPositions;
+
+static void icuPositionsFree(IcuPositions *p) {
+  free(p->aWord);
+  free(p->aPos);
+  memset(p, 0, sizeof(*p));
+}
+
+/* The words ICU finds in a[iFrom..iTo), appended to aWord from *pnWord.
+ * Returns how many, or -1 on failure. */
+static int32_t icuWordsIn(UBreakIterator *pIter, const UChar *a, int32_t iFrom, int32_t iTo,
+                          int32_t *aWord, int32_t *pnWord) {
   UErrorCode status = U_ZERO_ERROR;
-  UBreakIterator *pIter;
-  int32_t *aWords;
-  int32_t nWords = 0;
   int32_t iStart;
   int32_t iEnd;
+  int32_t nFound = 0;
 
-  *paWords = NULL;
-  if (p->n == 0) return 0;
-  pIter = ubrk_open(UBRK_WORD, zLocale ? zLocale : "", p->a, p->n, &status);
-  if (U_FAILURE(status) || !pIter) {
-    if (pIter) ubrk_close(pIter);
-    return -1;
-  }
-  aWords = (int32_t *)malloc((size_t)(p->n + 1) * 2 * sizeof(int32_t));
-  if (!aWords) {
-    ubrk_close(pIter);
-    return -1;
-  }
+  if (iTo <= iFrom) return 0;
+  ubrk_setText(pIter, &a[iFrom], iTo - iFrom, &status);
+  if (U_FAILURE(status)) return -1;
   iStart = ubrk_first(pIter);
   for (iEnd = ubrk_next(pIter); iEnd != UBRK_DONE; iStart = iEnd, iEnd = ubrk_next(pIter)) {
     const int32_t ruleStatus = ubrk_getRuleStatus(pIter);
     if (iEnd <= iStart || (ruleStatus >= UBRK_WORD_NONE && ruleStatus < UBRK_WORD_NONE_LIMIT)) {
       continue;
     }
-    aWords[nWords * 2] = iStart;
-    aWords[nWords * 2 + 1] = iEnd;
-    nWords++;
+    aWord[*pnWord * 2] = iFrom + iStart;
+    aWord[*pnWord * 2 + 1] = iFrom + iEnd;
+    (*pnWord)++;
+    nFound++;
   }
-  ubrk_close(pIter);
-  *paWords = aWords;
-  return nWords;
+  return nFound;
 }
 
-/* Runs of the text's words equal to the query's, the last one only as a
- * prefix when bPrefix. */
-static int icuMatchWords(const IcuFolded *pText, const IcuFolded *pQuery, int bPrefix,
-                         const char *zLocale, IcuRanges *pOut) {
-  int32_t *aText = NULL;
-  int32_t *aQuery = NULL;
-  int32_t nText = icuWords(pText, zLocale, &aText);
-  int32_t nQuery = icuWords(pQuery, zLocale, &aQuery);
-  int32_t i;
+/* Every word of a[iFrom..iTo) as a position of its own. */
+static int icuPlainPositions(UBreakIterator *pIter, const UChar *a, int32_t iFrom, int32_t iTo,
+                             IcuPositions *p) {
+  const int32_t iFirst = p->nWord;
+  const int32_t nFound = icuWordsIn(pIter, a, iFrom, iTo, p->aWord, &p->nWord);
+  int32_t k;
 
-  if (nText < 0 || nQuery < 0) {
-    free(aText);
-    free(aQuery);
+  if (nFound < 0) return -1;
+  for (k = iFirst; k < iFirst + nFound; k++) {
+    IcuPosition *pos = &p->aPos[p->nPos++];
+    pos->iWord = k;
+    pos->nWord = 1;
+    pos->from = p->aWord[k * 2];
+    pos->to = p->aWord[k * 2 + 1];
+  }
+  return 0;
+}
+
+/* The word positions of the folded text, reading `[[a||b]]` groups as the
+ * tokenizer reads them. */
+static int icuPositionsOf(const IcuFolded *pText, const char *zLocale, IcuPositions *p) {
+  UErrorCode status = U_ZERO_ERROR;
+  UBreakIterator *pIter;
+  const UChar *a = pText->a;
+  const int32_t n = pText->n;
+  int iScan = 0;
+  int rc = 0;
+
+  memset(p, 0, sizeof(*p));
+  if (n == 0) return 0;
+  pIter = ubrk_open(UBRK_WORD, zLocale ? zLocale : "", NULL, 0, &status);
+  /* A group's words are read once per alternative and copied out once per
+   * position, so the words can number twice the text's code units. */
+  p->aWord = (int32_t *)malloc((size_t)(n + 1) * 4 * sizeof(int32_t));
+  p->aPos = (IcuPosition *)malloc((size_t)(n + 1) * sizeof(IcuPosition));
+  if (U_FAILURE(status) || !pIter || !p->aWord || !p->aPos) {
+    if (pIter) ubrk_close(pIter);
+    icuPositionsFree(p);
     return -1;
   }
-  for (i = 0; nQuery > 0 && i + nQuery <= nText; i++) {
+
+  while (rc == 0 && iScan < n) {
+    int iOpen = 0;
+    int iClose = 0;
+    int32_t aAltFirst[ICU_MAX_ALT];
+    int32_t aAltCount[ICU_MAX_ALT];
+    int32_t nAlt = 0;
+    int32_t nLongest = 0;
+    int32_t iSpanFrom;
+    int32_t iSpanTo;
+    int32_t iAlt;
+    int32_t iPos;
+
+    if (!fts5icuFindGroup(a, n, iScan, &iOpen, &iClose)) break;
+    rc = icuPlainPositions(pIter, a, iScan, iOpen, p);
+
+    for (iAlt = iOpen + 2; rc == 0 && iAlt <= iClose && nAlt < ICU_MAX_ALT; nAlt++) {
+      const int32_t iSep = fts5icuAltEnd(a, iAlt, iClose);
+      aAltFirst[nAlt] = p->nWord;
+      aAltCount[nAlt] = icuWordsIn(pIter, a, iAlt, iSep, p->aWord, &p->nWord);
+      if (aAltCount[nAlt] < 0) rc = -1;
+      if (aAltCount[nAlt] > nLongest) nLongest = aAltCount[nAlt];
+      iAlt = iSep + 2;
+    }
+    if (rc != 0) break;
+
+    /* The written form is the first alternative: its words' span, or the
+     * whole alternative when it holds none. */
+    if (aAltCount[0] > 0) {
+      iSpanFrom = p->aWord[aAltFirst[0] * 2];
+      iSpanTo = p->aWord[(aAltFirst[0] + aAltCount[0] - 1) * 2 + 1];
+    } else {
+      iSpanFrom = iOpen + 2;
+      iSpanTo = fts5icuAltEnd(a, iOpen + 2, iClose);
+    }
+
+    /* A position's words must sit next to each other in aWord, so the group's
+     * words are copied out position by position behind the ones read. */
+    for (iPos = 0; iPos < nLongest; iPos++) {
+      IcuPosition *pos = &p->aPos[p->nPos++];
+      int32_t k;
+      pos->iWord = p->nWord;
+      pos->nWord = 0;
+      pos->from = iSpanFrom;
+      pos->to = iSpanTo;
+      for (k = 0; k < nAlt; k++) {
+        if (iPos >= aAltCount[k]) continue;
+        p->aWord[p->nWord * 2] = p->aWord[(aAltFirst[k] + iPos) * 2];
+        p->aWord[p->nWord * 2 + 1] = p->aWord[(aAltFirst[k] + iPos) * 2 + 1];
+        p->nWord++;
+        pos->nWord++;
+      }
+    }
+    iScan = iClose + 2;
+  }
+  if (rc == 0) rc = icuPlainPositions(pIter, a, iScan, n, p);
+  ubrk_close(pIter);
+  if (rc != 0) icuPositionsFree(p);
+  return rc;
+}
+
+/* Whether a word of the text equals one of the query, or only starts with it
+ * when bPrefix. */
+static int icuWordTakes(const IcuFolded *pText, int32_t tFrom, int32_t tTo, const IcuFolded *pQuery,
+                        int32_t qFrom, int32_t qTo, int bPrefix) {
+  const int32_t tLen = tTo - tFrom;
+  const int32_t qLen = qTo - qFrom;
+  if (bPrefix ? tLen < qLen : tLen != qLen) return 0;
+  return memcmp(&pText->a[tFrom], &pQuery->a[qFrom], (size_t)qLen * sizeof(UChar)) == 0;
+}
+
+/* Runs of the text's word positions holding the query's words in order, the
+ * last one only as a prefix when bPrefix. */
+static int icuMatchWords(const IcuFolded *pText, const IcuFolded *pQuery, int bPrefix,
+                         const char *zLocale, IcuRanges *pOut) {
+  IcuPositions text;
+  IcuPositions query;
+  int32_t i;
+
+  if (icuPositionsOf(pText, zLocale, &text)) return -1;
+  if (icuPositionsOf(pQuery, zLocale, &query)) {
+    icuPositionsFree(&text);
+    return -1;
+  }
+  for (i = 0; query.nPos > 0 && i + query.nPos <= text.nPos; i++) {
     int32_t k;
     int bMatch = 1;
 
-    for (k = 0; k < nQuery && bMatch; k++) {
-      const int32_t tFrom = aText[(i + k) * 2];
-      const int32_t tLen = aText[(i + k) * 2 + 1] - tFrom;
-      const int32_t qFrom = aQuery[k * 2];
-      const int32_t qLen = aQuery[k * 2 + 1] - qFrom;
-      const int bLast = k == nQuery - 1;
+    for (k = 0; k < query.nPos && bMatch; k++) {
+      const IcuPosition *tPos = &text.aPos[i + k];
+      const int32_t qWord = query.aPos[k].iWord;
+      const int bLastPrefix = bPrefix && k == query.nPos - 1;
+      int32_t w;
 
-      if (bPrefix && bLast) {
-        bMatch = tLen >= qLen && memcmp(&pText->a[tFrom], &pQuery->a[qFrom],
-                                        (size_t)qLen * sizeof(UChar)) == 0;
-      } else {
-        bMatch = tLen == qLen && memcmp(&pText->a[tFrom], &pQuery->a[qFrom],
-                                        (size_t)qLen * sizeof(UChar)) == 0;
+      bMatch = 0;
+      for (w = tPos->iWord; w < tPos->iWord + tPos->nWord && !bMatch; w++) {
+        bMatch = icuWordTakes(pText, text.aWord[w * 2], text.aWord[w * 2 + 1], pQuery,
+                              query.aWord[qWord * 2], query.aWord[qWord * 2 + 1], bLastPrefix);
       }
     }
     if (bMatch) {
-      icuRangesAdd(pOut, pText->aMap[aText[i * 2]], pText->aMap[aText[(i + nQuery - 1) * 2 + 1]],
-                   FTS5ICU_MATCH_TYPED);
+      icuRangesAdd(pOut, pText->aMap[text.aPos[i].from],
+                   pText->aMap[text.aPos[i + query.nPos - 1].to], FTS5ICU_MATCH_TYPED);
     }
   }
-  free(aText);
-  free(aQuery);
+  icuPositionsFree(&text);
+  icuPositionsFree(&query);
   return 0;
 }
 

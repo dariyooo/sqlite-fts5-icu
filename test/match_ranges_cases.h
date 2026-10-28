@@ -34,6 +34,14 @@ static const MatchRangesCase matchRangesCases[] = {
   {"word, part of a Japanese word", "東京都に住んでいます", "東", "word", "[]"},
   {"word prefix", "eating to eat", "ea", "word_prefix", "[[0,6,2],[10,13,2]]"},
   {"word prefix, only the last word", "to eat rice", "to ea", "word_prefix", "[[0,6,2]]"},
+  /* An alternatives group matches on any of its forms and covers the written
+   * one, the first; offsets stay in the marked text. */
+  {"word, an alternative of a group", "[[ran||run]] fast", "run", "word", "[[2,5,2]]"},
+  {"word, a phrase across a group", "I [[ran||run]] home", "run home", "word", "[[4,19,2]]"},
+  {"word prefix, an alternative of a group", "[[ran||running]]", "runn", "word_prefix",
+   "[[2,5,2]]"},
+  {"word, a group's words share its span", "[[New York||NY]] city", "york", "word", "[[2,10,2]]"},
+  {"word, an unclosed group is ordinary text", "[[a||b", "b", "word", "[[5,6,2]]"},
   {"glob, ? stands for one", "食べ物", "食?物", "glob", "[[0,1,2],[1,2,1],[2,3,2]]"},
   {"glob, * on both sides", "アカウント", "*カ*", "glob", "[[0,1,1],[1,2,2],[2,5,1]]"},
   {"glob, a set", "月曜日", "[月火]曜日", "glob", "[[0,1,1],[1,3,2]]"},

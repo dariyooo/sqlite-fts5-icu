@@ -36,9 +36,6 @@ SQLITE_EXTENSION_INIT1
 #include "unicode/utf8.h"
 #include "unicode/utypes.h"
 
-/* Alternatives past this in one group are indexed as ordinary text. */
-#define ICU_MAX_ALT 64
-
 /* The delimiters of an alternatives group, `[[a||b]]`, each two equal
  * characters. Exported so whoever writes index text reads them from here. */
 #ifdef _WIN32
@@ -224,7 +221,7 @@ static int icuEmitRange(IcuScratch *pScratch, UBreakIterator *pIter, void *pCtx,
  *
  * A group needs both delimiters and at least one separator between them, so
  * prose that merely quotes brackets is left as ordinary text. */
-static int icuFindGroup(const UChar *aChar, int nChar, int iScan, int *piOpen, int *piClose) {
+int fts5icuFindGroup(const UChar *aChar, int nChar, int iScan, int *piOpen, int *piClose) {
   int i;
 
   for (i = iScan; i + 1 < nChar; i++) {
@@ -252,7 +249,7 @@ static int icuFindGroup(const UChar *aChar, int nChar, int iScan, int *piOpen, i
 
 /* The end of the alternative starting at iAlt: the next `||` before iClose, or
  * iClose when this is the last one. */
-static int icuAltEnd(const UChar *aChar, int iAlt, int iClose) {
+int fts5icuAltEnd(const UChar *aChar, int iAlt, int iClose) {
   int i = iAlt;
 
   while (i + 1 < iClose && !icuPairAt(aChar, i, fts5icu_group_separator)) {
@@ -355,7 +352,7 @@ static int icuTokenize(IcuScratch *pScratch, UBreakIterator *pIter, void *pCtx, 
     int iSurfFrom;
     int iSurfTo;
 
-    if (!icuFindGroup(pScratch->aChar, pScratch->nChar, iScan, &iOpen, &iClose)) break;
+    if (!fts5icuFindGroup(pScratch->aChar, pScratch->nChar, iScan, &iOpen, &iClose)) break;
 
     /* Everything before the group is ordinary text. */
     rc = icuEmitRange(pScratch, pIter, pCtx, iScan, iOpen, 0, &nEmitted, xToken);
@@ -367,7 +364,7 @@ static int icuTokenize(IcuScratch *pScratch, UBreakIterator *pIter, void *pCtx, 
      * positions as its longest alternative, and no later word collides with a
      * colocated token. */
     for (iAlt = iOpen + 2, nAlt = 0; iAlt <= iClose && nAlt < ICU_MAX_ALT; nAlt++) {
-      int iSep = icuAltEnd(pScratch->aChar, iAlt, iClose);
+      int iSep = fts5icuAltEnd(pScratch->aChar, iAlt, iClose);
       int nRun = icuCountWords(pScratch, pIter, iAlt, iSep);
 
       aAltFrom[nAlt] = iAlt;
