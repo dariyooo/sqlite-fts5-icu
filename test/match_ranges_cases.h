@@ -32,8 +32,11 @@ static const MatchRangesCase matchRangesCases[] = {
   {"word, a phrase out of order", "rice to eat", "eat rice", "word", "[]"},
   {"word, Japanese dictionary words", "東京都に住んでいます", "東京", "word", "[[0,2,2]]"},
   {"word, part of a Japanese word", "東京都に住んでいます", "東", "word", "[]"},
-  {"word prefix", "eating to eat", "ea", "word_prefix", "[[0,6,2],[10,13,2]]"},
-  {"word prefix, only the last word", "to eat rice", "to ea", "word_prefix", "[[0,6,2]]"},
+  /* A prefix marks what it spelled typed and the rest of its word as a
+   * wildcard would. */
+  {"word prefix", "eating to eat", "ea", "word_prefix", "[[0,2,2],[2,6,1],[10,12,2],[12,13,1]]"},
+  {"word prefix, only the last word", "to eat rice", "to ea", "word_prefix", "[[0,5,2],[5,6,1]]"},
+  {"word prefix, the whole word spelled", "to eat", "eat", "word_prefix", "[[3,6,2]]"},
   /* An alternatives group matches on any of its forms and covers the written
    * one, the first; offsets stay in the marked text. */
   {"word, an alternative of a group", "[[ran||run]] fast", "run", "word", "[[2,5,2]]"},
