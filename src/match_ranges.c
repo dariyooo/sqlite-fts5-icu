@@ -279,7 +279,9 @@ static int icuWordTakes(const IcuFolded *pText, int32_t tFrom, int32_t tTo, cons
 }
 
 /* Runs of the text's word positions holding the query's words in order, the
- * last one only as a prefix when bPrefix. A prefix's word outside a group is
+ * last one only as a prefix when bPrefix, each word of a run its own range:
+ * what lies between two words is no part of the match. A prefix's word
+ * outside a group is
  * marked typed as far as the query spelled it and wildcard past that, as a
  * GLOB `*` would be; a group's written form is marked whole, since another of
  * its forms may be the one that matched. */
@@ -317,14 +319,17 @@ static int icuMatchWords(const IcuFolded *pText, const IcuFolded *pQuery, int bP
       const int bPlain = last->nWord == 1 && text.aWord[last->iWord * 2] == last->from &&
                          text.aWord[last->iWord * 2 + 1] == last->to;
 
+      for (k = 0; k + 1 < query.nPos; k++) {
+        icuRangesAdd(pOut, pText->aMap[text.aPos[i + k].from], pText->aMap[text.aPos[i + k].to],
+                     FTS5ICU_MATCH_TYPED);
+      }
       if (bPrefix && bPlain && last->from + qLen < last->to) {
-        icuRangesAdd(pOut, pText->aMap[text.aPos[i].from], pText->aMap[last->from + qLen],
+        icuRangesAdd(pOut, pText->aMap[last->from], pText->aMap[last->from + qLen],
                      FTS5ICU_MATCH_TYPED);
         icuRangesAdd(pOut, pText->aMap[last->from + qLen], pText->aMap[last->to],
                      FTS5ICU_MATCH_WILDCARD);
       } else {
-        icuRangesAdd(pOut, pText->aMap[text.aPos[i].from], pText->aMap[last->to],
-                     FTS5ICU_MATCH_TYPED);
+        icuRangesAdd(pOut, pText->aMap[last->from], pText->aMap[last->to], FTS5ICU_MATCH_TYPED);
       }
     }
   }

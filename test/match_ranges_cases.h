@@ -27,20 +27,25 @@ static const MatchRangesCase matchRangesCases[] = {
   {"inside, a supplementary code point", "𠮷野家の𠮷", "𠮷", "inside", "[[0,2,2],[5,7,2]]"},
   {"inside, offsets in the text as written", "THE Cat", "cat", "inside", "[[4,7,2]]"},
   {"word, whole words only", "eating to eat", "eat", "word", "[[10,13,2]]"},
-  {"word, a phrase", "to eat rice", "eat rice", "word", "[[3,11,2]]"},
-  {"word, punctuation between the words", "Hello, World!", "hello world", "word", "[[0,12,2]]"},
+  /* Each word of a phrase is its own range; what lies between is not. */
+  {"word, a phrase", "to eat rice", "eat rice", "word", "[[3,6,2],[7,11,2]]"},
+  {"word, punctuation between the words", "Hello, World!", "hello world", "word",
+   "[[0,5,2],[7,12,2]]"},
+  {"word, touching words join", "東京都に住んでいます", "東京都", "word", "[[0,3,2]]"},
   {"word, a phrase out of order", "rice to eat", "eat rice", "word", "[]"},
   {"word, Japanese dictionary words", "東京都に住んでいます", "東京", "word", "[[0,2,2]]"},
   {"word, part of a Japanese word", "東京都に住んでいます", "東", "word", "[]"},
   /* A prefix marks what it spelled typed and the rest of its word as a
    * wildcard would. */
   {"word prefix", "eating to eat", "ea", "word_prefix", "[[0,2,2],[2,6,1],[10,12,2],[12,13,1]]"},
-  {"word prefix, only the last word", "to eat rice", "to ea", "word_prefix", "[[0,5,2],[5,6,1]]"},
+  {"word prefix, only the last word", "to eat rice", "to ea", "word_prefix",
+   "[[0,2,2],[3,5,2],[5,6,1]]"},
   {"word prefix, the whole word spelled", "to eat", "eat", "word_prefix", "[[3,6,2]]"},
   /* An alternatives group matches on any of its forms and covers the written
    * one, the first; offsets stay in the marked text. */
   {"word, an alternative of a group", "[[ran||run]] fast", "run", "word", "[[2,5,2]]"},
-  {"word, a phrase across a group", "I [[ran||run]] home", "run home", "word", "[[4,19,2]]"},
+  {"word, a phrase across a group", "I [[ran||run]] home", "run home", "word",
+   "[[4,7,2],[15,19,2]]"},
   {"word prefix, an alternative of a group", "[[ran||running]]", "runn", "word_prefix",
    "[[2,5,2]]"},
   {"word, a group's words share its span", "[[New York||NY]] city", "york", "word", "[[2,10,2]]"},

@@ -71,7 +71,7 @@ Returns where a query matches in a text, as JSON `[[start, end, strength], ...]`
 - `exact`: the whole text equals the query.
 - `prefix`: the text starts with the query.
 - `inside`: every occurrence of the query in the text.
-- `word`: every run of the text's words equal to the query's words, broken as the tokenizer breaks them. Alternatives groups (`[[a||b]]`) are read as the tokenizer reads them: a query word matches any form at a group's position, and the range covers the written form, the first, in the marked text.
+- `word`: every run of the text's words equal to the query's words, broken as the tokenizer breaks them, each word its own range. Alternatives groups (`[[a||b]]`) are read as the tokenizer reads them: a query word matches any form at a group's position, and the range covers the written form, the first, in the marked text.
 - `word_prefix`: the same, the last word only starting with the query's last word; that word is typed as far as the query spelled it and wildcard past it, and an alternatives group's written form is typed whole.
 - `glob`: the query as a SQLite GLOB pattern over the whole text; a `*` takes as few code points as the rest of the pattern allows.
 
