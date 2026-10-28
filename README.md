@@ -59,6 +59,24 @@ SELECT icu_scsu_decode(icu_scsu_encode('これはテストですよ')); -- こ�
 
 Text that is not valid UTF-8 stays text. Decoding a BLOB that is not SCSU raises an SQL error. SQL `NULL` remains `NULL`.
 
+### Match ranges
+
+```sql
+SELECT icu_match_ranges('アカウント', '*カ*', 'glob');  -- [[0,1,1],[1,2,2],[2,5,1]]
+SELECT icu_match_ranges('eating to eat', 'eat', 'word'); -- [[10,13,2]]
+```
+
+Returns where a query matches in a text, as JSON `[[start, end, strength], ...]`: half-open UTF-16 offsets into the text as written, sorted, touching ranges of one strength joined. Strength `2` marks code points the query spelled out, `1` code points a GLOB wildcard stood for. Both sides are case-folded one code point at a time, as the tokenizer folds, so `ß` does not match `ss`. The kind is one of:
+
+- `exact`: the whole text equals the query.
+- `prefix`: the text starts with the query.
+- `inside`: every occurrence of the query in the text.
+- `word`: every run of the text's words equal to the query's words, broken as the tokenizer breaks them.
+- `word_prefix`: the same, the last word only starting with the query's last word.
+- `glob`: the query as a SQLite GLOB pattern over the whole text; a `*` takes as few code points as the rest of the pattern allows.
+
+`NULL` text or query returns `NULL`; an unknown kind raises an SQL error. No match returns `[]`.
+
 ## Native API
 
 Include [`src/fts5_icu.h`](src/fts5_icu.h), or bind the exported C functions through FFI. These functions work without a database connection or a call to `sqlite3_fts5icu_init`.
@@ -99,6 +117,18 @@ void fts5icu_free(void *result);
 ```
 
 Folds a NUL-terminated UTF-8 string exactly as `icu_casefold()` does, so text folded outside a query compares equal to text folded in SQL. Returns a newly allocated UTF-8 string, or `NULL` for `NULL` input or on allocation failure. Bytes that are not valid UTF-8 pass through unchanged. Free each result with `fts5icu_free()`. Calls share no state and can run concurrently.
+
+### Match ranges
+
+```c
+int32_t fts5icu_match_ranges(
+    const uint16_t *text, int32_t textLength,
+    const uint16_t *query, int32_t queryLength,
+    int32_t kind, const char *locale,
+    Fts5IcuMatchRange **ranges);
+```
+
+What `icu_match_ranges()` returns, as an array of `{start, end, strength}`: the range count, or `-1` on invalid arguments, allocation or ICU failure. `kind` is one of `FTS5ICU_MATCH_EXACT`, `_PREFIX`, `_INSIDE`, `_WORD`, `_WORD_PREFIX`, `_GLOB`; strength is `FTS5ICU_MATCH_TYPED` or `FTS5ICU_MATCH_WILDCARD`. `locale` selects the word kinds' rules as for word ranges. On zero ranges or failure, `*ranges` is `NULL`. Free a result with `fts5icu_free()`.
 
 ### Transliteration
 

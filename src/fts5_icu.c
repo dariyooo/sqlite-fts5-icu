@@ -1,6 +1,6 @@
 /* An fts5 tokenizer that segments with ICU's word BreakIterator, and the
  * extension's entry point, which also registers the scalar functions in
- * transliterate.c, casefold.c and scsu.c.
+ * transliterate.c, casefold.c, scsu.c and match_ranges.c.
  *
  * The tokenizer is a port of SQLite's own fts3 ICU tokenizer (ext/fts3/fts3_icu.c)
  * to the fts5 tokenizer API. fts3 pulls one token at a time through a cursor;
@@ -561,6 +561,9 @@ int sqlite3_fts5icu_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routine
   if (rc != SQLITE_OK) return rc;
 
   rc = fts5icuRegisterScsu(db);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = fts5icuRegisterMatchRanges(db);
   if (rc != SQLITE_OK) return rc;
 
   pApi = icuFts5Api(db);

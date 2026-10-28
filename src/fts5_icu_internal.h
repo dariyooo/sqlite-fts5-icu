@@ -8,5 +8,6 @@
 int fts5icuRegisterTransliterate(sqlite3 *db);
 int fts5icuRegisterCasefold(sqlite3 *db);
 int fts5icuRegisterScsu(sqlite3 *db);
+int fts5icuRegisterMatchRanges(sqlite3 *db);
 
 #endif
