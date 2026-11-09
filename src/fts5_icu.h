@@ -41,8 +41,8 @@ typedef struct Fts5IcuMatchRange {
   int32_t strength;
 } Fts5IcuMatchRange;
 
-/* Where query matches in text under kind, case-folded as the tokenizer folds:
- * the number of ranges, or -1 on invalid arguments, allocation or ICU failure.
+/* Where query matches in text under kind, case-folded as the tokenizer folds
+ * (a GLOB pattern matches as written, as SQLite's GLOB does): the number of ranges, or -1 on invalid arguments, allocation or ICU failure.
  * Ranges are half-open UTF-16 offsets into text as written, sorted, with
  * touching ones of one strength joined. NULL/empty locale uses ICU's root
  * rules. On zero ranges or failure, *ranges is NULL. Free with fts5icu_free(). */

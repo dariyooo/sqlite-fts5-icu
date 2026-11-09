@@ -40,7 +40,8 @@ static void icuFoldedFree(IcuFolded *p) {
   memset(p, 0, sizeof(*p));
 }
 
-static int icuFoldMapped(const UChar *aText, int32_t nText, IcuFolded *p) {
+/* aText case-folded into p, or copied as written when !bFold. */
+static int icuFoldMapped(const UChar *aText, int32_t nText, int bFold, IcuFolded *p) {
   /* A folded code point takes at most two units, as any code point does. */
   const int32_t nCap = nText * 2 + 2;
   int32_t i = 0;
@@ -61,7 +62,7 @@ static int icuFoldMapped(const UChar *aText, int32_t nText, IcuFolded *p) {
     int32_t k;
 
     U16_NEXT(aText, i, nText, c);
-    c = u_foldCase(c, U_FOLD_CASE_DEFAULT);
+    if (bFold) c = u_foldCase(c, U_FOLD_CASE_DEFAULT);
     U16_APPEND(p->a, o, nCap, c, isError);
     if (isError) {
       icuFoldedFree(p);
@@ -547,8 +548,11 @@ int32_t fts5icu_match_ranges(const uint16_t *aText, int32_t nText, const uint16_
   *ppRanges = NULL;
   if (nText < 0 || nQuery < 0 || (!aText && nText > 0) || (!aQuery && nQuery > 0)) return -1;
   if (kind < FTS5ICU_MATCH_EXACT || kind > FTS5ICU_MATCH_GLOB) return -1;
-  if (icuFoldMapped((const UChar *)aText, nText, &text)) return -1;
-  if (icuFoldMapped((const UChar *)aQuery, nQuery, &query)) {
+  /* A GLOB pattern matches the text as written, as SQLite's GLOB does: case
+   * counts. The other kinds fold as the tokenizer folds. */
+  const int bFold = kind != FTS5ICU_MATCH_GLOB;
+  if (icuFoldMapped((const UChar *)aText, nText, bFold, &text)) return -1;
+  if (icuFoldMapped((const UChar *)aQuery, nQuery, bFold, &query)) {
     icuFoldedFree(&text);
     return -1;
   }
