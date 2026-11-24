@@ -27,7 +27,11 @@ static const TokenizerOptionsCase tokenizerOptionsCases[] = {
   {"split_punctuation splits at spaces and symbols", "icu split_punctuation", "a b+c", "a b c",
    NULL, NULL},
   {"without the option, ICU's dictionary words", "icu root", "つくえ", "え つく", NULL, NULL},
+  {"the option may stand before the locale", "icu split_punctuation ja", "東京都に住んでいます",
+   "東京都に住んでいます", NULL, NULL},
   {"an unknown option fails the table", "icu root bogus", NULL, NULL, NULL, NULL},
+  {"a second locale beside the option fails the table", "icu ja en split_punctuation", NULL, NULL,
+   NULL, NULL},
 };
 
 #endif
