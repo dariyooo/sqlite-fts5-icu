@@ -41,6 +41,15 @@ static const WordRangesCase wordRangesCases[] = {
   {"NULL nonempty text", NULL, 1, NULL, 0, -1, {{0, 0}}},
   {"negative length", u"cat", -1, NULL, 0, -1, {{0, 0}}},
   {"NULL output", u"cat", 3, NULL, 1, -1, {{0, 0}}},
+  {"split_punctuation keeps a kana run whole", u"つくえ", 3, "split_punctuation", 0, 1, {{0, 3}}},
+  {"split_punctuation splits at the dot only", u"た.べる", 4, "split_punctuation", 0, 2,
+   {{0, 1}, {2, 4}}},
+  {"split_punctuation drops punctuation at the ends", u"-こ.める-", 6, "split_punctuation", 0, 2,
+   {{1, 2}, {3, 5}}},
+  {"split_punctuation splits at spaces and symbols", u"a b+c", 5, "split_punctuation", 0, 3,
+   {{0, 1}, {2, 3}, {4, 5}}},
+  {"an unknown option is an error", u"cat", 3, "root bogus", 0, -1, {{0, 0}}},
+  {"a locale alone keeps dictionary words", u"つくえ", 3, "root", 0, 2, {{0, 2}, {2, 3}}},
 };
 
 #endif

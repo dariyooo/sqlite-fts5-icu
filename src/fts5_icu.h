@@ -14,7 +14,9 @@ typedef struct Fts5IcuWordRange {
 
 /* Returns the word count, or -1 on invalid arguments, allocation or ICU failure.
  * Ranges are half-open UTF-16 offsets into text, with no normalization applied.
- * NULL/empty locale uses ICU's root rules. text may be NULL only when length is 0.
+ * locale is an ICU locale, then option words (NULL/empty is ICU's root rules): the word
+ * split_punctuation breaks words only where ICU finds no word (punctuation, symbols,
+ * spaces); any other second word returns -1. text may be NULL only when length is 0.
  * On zero words or failure, *ranges is NULL. Free a result with fts5icu_free(). */
 int32_t fts5icu_word_ranges(const uint16_t *text, int32_t length, const char *locale,
                            Fts5IcuWordRange **ranges);
@@ -44,8 +46,8 @@ typedef struct Fts5IcuMatchRange {
 /* Where query matches in text under kind, case-folded as the tokenizer folds
  * (a GLOB pattern matches as written, as SQLite's GLOB does): the number of ranges, or -1 on invalid arguments, allocation or ICU failure.
  * Ranges are half-open UTF-16 offsets into text as written, sorted, with
- * touching ones of one strength joined. NULL/empty locale uses ICU's root
- * rules. On zero ranges or failure, *ranges is NULL. Free with fts5icu_free(). */
+ * touching ones of one strength joined. locale holds what fts5icu_word_ranges
+ * takes. On zero ranges or failure, *ranges is NULL. Free with fts5icu_free(). */
 int32_t fts5icu_match_ranges(const uint16_t *text, int32_t textLength, const uint16_t *query,
                              int32_t queryLength, int32_t kind, const char *locale,
                              Fts5IcuMatchRange **ranges);

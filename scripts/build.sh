@@ -230,6 +230,12 @@ if [[ "$TARGET_CAN_RUN" == yes ]]; then
   # shellcheck disable=SC2086
   "$TARGET_CC" -O1 $TARGET_CFLAGS -I"$SRC/include" -I"$ROOT/src" \
     -o "$TARGET_DIR/link/match_ranges" "$ROOT/test/match_ranges.c" "$SQLITE_OBJ" $TEST_LIBS $TARGET_LDFLAGS
+  # shellcheck disable=SC2086
+  "$TARGET_CC" -O1 $TARGET_CFLAGS -I"$SRC/include" -I"$ROOT/test" \
+    -o "$TARGET_DIR/link/tokenizer_options" "$ROOT/test/tokenizer_options.c" "$SQLITE_OBJ" $TEST_LIBS $TARGET_LDFLAGS
+  # shellcheck disable=SC2086
+  "$TARGET_CC" -O1 $TARGET_CFLAGS -I"$ROOT/src" \
+    -o "$TARGET_DIR/link/match_ranges_native" "$ROOT/test/match_ranges_native.c" $TEST_LIBS $TARGET_LDFLAGS
   # A Windows binary cannot open the MSYS2 path this script is written in.
   if command -v cygpath > /dev/null; then
     "$TARGET_DIR/link/data_and_exports" "$(cygpath -w "$OUT")"
@@ -237,12 +243,16 @@ if [[ "$TARGET_CAN_RUN" == yes ]]; then
     "$TARGET_DIR/link/word_ranges" "$(cygpath -w "$OUT")"
     "$TARGET_DIR/link/scsu" "$(cygpath -w "$OUT")"
     "$TARGET_DIR/link/match_ranges" "$(cygpath -w "$OUT")"
+    "$TARGET_DIR/link/tokenizer_options" "$(cygpath -w "$OUT")"
+    "$TARGET_DIR/link/match_ranges_native" "$(cygpath -w "$OUT")"
   else
     "$TARGET_DIR/link/data_and_exports" "$OUT"
     "$TARGET_DIR/link/alternatives" "$OUT"
     "$TARGET_DIR/link/word_ranges" "$OUT"
     "$TARGET_DIR/link/scsu" "$OUT"
     "$TARGET_DIR/link/match_ranges" "$OUT"
+    "$TARGET_DIR/link/tokenizer_options" "$OUT"
+    "$TARGET_DIR/link/match_ranges_native" "$OUT"
   fi
 else
   echo "==> tests skipped ($TARGET does not run here)"

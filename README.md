@@ -9,9 +9,12 @@ A SQLite FTS5 tokenizer backed by ICU, with SQL case folding and transliteration
 ```sql
 CREATE VIRTUAL TABLE t USING fts5(x, tokenize='icu');
 CREATE VIRTUAL TABLE localized USING fts5(x, tokenize='icu ja');
+CREATE VIRTUAL TABLE joined USING fts5(x, tokenize='icu split_punctuation');
 ```
 
 The optional locale selects ICU's locale-specific rules. Without it, the tokenizer uses ICU's root rules. ICU also selects dictionary segmentation by script, including Japanese, Chinese and Thai.
+
+The option word `split_punctuation` (before or after the locale) joins the words ICU finds where no punctuation, symbol or space lies between them: `つくえ` stays one token, `た.べる` becomes `た` and `べる`. Any other second word makes `CREATE VIRTUAL TABLE` fail.
 
 Tokens use Unicode simple case folding. Accents and other spelling differences remain unchanged. Standalone punctuation, symbols and whitespace produce no tokens. This differs from `unicode61`'s default diacritic removal.
 
@@ -94,7 +97,7 @@ int32_t fts5icu_word_ranges(
 Returns the number of words and allocates an array of `{int32_t start, end}` pairs. Each range is `[start, end)` in **UTF-16 code units**, matching Dart strings and Flutter selections. Input is read-only, with no case folding, normalization or alternatives-markup expansion.
 
 - `length` is explicit, not NUL-terminated. Embedded NULs are accepted. `text` may be `NULL` only when `length` is zero.
-- `locale` is a NUL-terminated ICU locale ID. `NULL` or `""` selects root rules, independent of the machine's default locale. ICU may fall back for unsupported locales.
+- `locale` is a NUL-terminated ICU locale ID, optionally with the option word `split_punctuation` as in the tokenizer (`"split_punctuation"`, `"ja split_punctuation"`); any other second word returns `-1`. `NULL` or `""` selects root rules, independent of the machine's default locale. ICU may fall back for unsupported locales.
 - Words include numbers and dictionary-segmented text. Non-word spans, including standalone punctuation, whitespace and emoji, are omitted. Returned ranges can have gaps.
 - Zero words returns `0` with `*ranges == NULL`. Invalid arguments, allocation failure or an ICU error return `-1`; a supplied output pointer is cleared to `NULL`.
 - Release returned memory with `fts5icu_free()`, including across an FFI boundary. Each call has its own iterator and can run concurrently with other calls.
@@ -164,6 +167,8 @@ When the target can execute on the build machine, the build runs:
 - `test/data_and_exports.c`: tokenizer data, SQL transliteration and native exports.
 - `test/alternatives.c`: alternative positions, queries and highlighting.
 - `test/word_ranges.c`: native UTF-16 ranges, multilingual segmentation and argument validation, without linking SQLite. Its inputs and expected ranges live in `test/word_ranges_cases.h`.
+- `test/tokenizer_options.c`: the terms and highlights of `tokenize='icu ...'` options, from `test/tokenizer_options_cases.h`.
+- `test/match_ranges_native.c`: `fts5icu_match_ranges` with option words, without linking SQLite, from `test/match_ranges_native_cases.h`.
 
 Other targets are compiled but their tests are not run on that host.
 

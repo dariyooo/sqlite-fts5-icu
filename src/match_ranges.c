@@ -144,9 +144,10 @@ static void icuPositionsFree(IcuPositions *p) {
 
 /* The words ICU finds in a[iFrom..iTo), appended to aWord from *pnWord.
  * Returns how many, or -1 on failure. */
-static int32_t icuWordsIn(UBreakIterator *pIter, const UChar *a, int32_t iFrom, int32_t iTo,
-                          int32_t *aWord, int32_t *pnWord) {
+static int32_t icuWordsIn(UBreakIterator *pIter, int bJoin, const UChar *a, int32_t iFrom,
+                          int32_t iTo, int32_t *aWord, int32_t *pnWord) {
   UErrorCode status = U_ZERO_ERROR;
+  int32_t iPos;
   int32_t iStart;
   int32_t iEnd;
   int32_t nFound = 0;
@@ -154,12 +155,8 @@ static int32_t icuWordsIn(UBreakIterator *pIter, const UChar *a, int32_t iFrom, 
   if (iTo <= iFrom) return 0;
   ubrk_setText(pIter, &a[iFrom], iTo - iFrom, &status);
   if (U_FAILURE(status)) return -1;
-  iStart = ubrk_first(pIter);
-  for (iEnd = ubrk_next(pIter); iEnd != UBRK_DONE; iStart = iEnd, iEnd = ubrk_next(pIter)) {
-    const int32_t ruleStatus = ubrk_getRuleStatus(pIter);
-    if (iEnd <= iStart || (ruleStatus >= UBRK_WORD_NONE && ruleStatus < UBRK_WORD_NONE_LIMIT)) {
-      continue;
-    }
+  iPos = ubrk_first(pIter);
+  while (fts5icuNextWord(pIter, bJoin, &iPos, &iStart, &iEnd)) {
     aWord[*pnWord * 2] = iFrom + iStart;
     aWord[*pnWord * 2 + 1] = iFrom + iEnd;
     (*pnWord)++;
@@ -169,10 +166,10 @@ static int32_t icuWordsIn(UBreakIterator *pIter, const UChar *a, int32_t iFrom, 
 }
 
 /* Every word of a[iFrom..iTo) as a position of its own. */
-static int icuPlainPositions(UBreakIterator *pIter, const UChar *a, int32_t iFrom, int32_t iTo,
-                             IcuPositions *p) {
+static int icuPlainPositions(UBreakIterator *pIter, int bJoin, const UChar *a, int32_t iFrom,
+                             int32_t iTo, IcuPositions *p) {
   const int32_t iFirst = p->nWord;
-  const int32_t nFound = icuWordsIn(pIter, a, iFrom, iTo, p->aWord, &p->nWord);
+  const int32_t nFound = icuWordsIn(pIter, bJoin, a, iFrom, iTo, p->aWord, &p->nWord);
   int32_t k;
 
   if (nFound < 0) return -1;
@@ -188,7 +185,8 @@ static int icuPlainPositions(UBreakIterator *pIter, const UChar *a, int32_t iFro
 
 /* The word positions of the folded text, reading `[[a||b]]` groups as the
  * tokenizer reads them. */
-static int icuPositionsOf(const IcuFolded *pText, const char *zLocale, IcuPositions *p) {
+static int icuPositionsOf(const IcuFolded *pText, const Fts5IcuOptions *pOptions,
+                          IcuPositions *p) {
   UErrorCode status = U_ZERO_ERROR;
   UBreakIterator *pIter;
   const UChar *a = pText->a;
@@ -198,7 +196,7 @@ static int icuPositionsOf(const IcuFolded *pText, const char *zLocale, IcuPositi
 
   memset(p, 0, sizeof(*p));
   if (n == 0) return 0;
-  pIter = ubrk_open(UBRK_WORD, zLocale ? zLocale : "", NULL, 0, &status);
+  pIter = ubrk_open(UBRK_WORD, pOptions->zLocale, NULL, 0, &status);
   /* A group's words are read once per alternative and copied out once per
    * position, so the words can number twice the text's code units. */
   p->aWord = (int32_t *)malloc((size_t)(n + 1) * 4 * sizeof(int32_t));
@@ -222,12 +220,13 @@ static int icuPositionsOf(const IcuFolded *pText, const char *zLocale, IcuPositi
     int32_t iPos;
 
     if (!fts5icuFindGroup(a, n, iScan, &iOpen, &iClose)) break;
-    rc = icuPlainPositions(pIter, a, iScan, iOpen, p);
+    rc = icuPlainPositions(pIter, pOptions->bJoin, a, iScan, iOpen, p);
 
     for (iAlt = iOpen + 2; rc == 0 && iAlt <= iClose && nAlt < ICU_MAX_ALT; nAlt++) {
       const int32_t iSep = fts5icuAltEnd(a, iAlt, iClose);
       aAltFirst[nAlt] = p->nWord;
-      aAltCount[nAlt] = icuWordsIn(pIter, a, iAlt, iSep, p->aWord, &p->nWord);
+      aAltCount[nAlt] =
+          icuWordsIn(pIter, pOptions->bJoin, a, iAlt, iSep, p->aWord, &p->nWord);
       if (aAltCount[nAlt] < 0) rc = -1;
       if (aAltCount[nAlt] > nLongest) nLongest = aAltCount[nAlt];
       iAlt = iSep + 2;
@@ -263,7 +262,7 @@ static int icuPositionsOf(const IcuFolded *pText, const char *zLocale, IcuPositi
     }
     iScan = iClose + 2;
   }
-  if (rc == 0) rc = icuPlainPositions(pIter, a, iScan, n, p);
+  if (rc == 0) rc = icuPlainPositions(pIter, pOptions->bJoin, a, iScan, n, p);
   ubrk_close(pIter);
   if (rc != 0) icuPositionsFree(p);
   return rc;
@@ -287,13 +286,13 @@ static int icuWordTakes(const IcuFolded *pText, int32_t tFrom, int32_t tTo, cons
  * GLOB `*` would be; a group's written form is marked whole, since another of
  * its forms may be the one that matched. */
 static int icuMatchWords(const IcuFolded *pText, const IcuFolded *pQuery, int bPrefix,
-                         const char *zLocale, IcuRanges *pOut) {
+                         const Fts5IcuOptions *pOptions, IcuRanges *pOut) {
   IcuPositions text;
   IcuPositions query;
   int32_t i;
 
-  if (icuPositionsOf(pText, zLocale, &text)) return -1;
-  if (icuPositionsOf(pQuery, zLocale, &query)) {
+  if (icuPositionsOf(pText, pOptions, &text)) return -1;
+  if (icuPositionsOf(pQuery, pOptions, &query)) {
     icuPositionsFree(&text);
     return -1;
   }
@@ -542,12 +541,14 @@ int32_t fts5icu_match_ranges(const uint16_t *aText, int32_t nText, const uint16_
   IcuFolded text;
   IcuFolded query;
   IcuRanges out;
+  Fts5IcuOptions options;
   int rc = 0;
 
   if (!ppRanges) return -1;
   *ppRanges = NULL;
   if (nText < 0 || nQuery < 0 || (!aText && nText > 0) || (!aQuery && nQuery > 0)) return -1;
   if (kind < FTS5ICU_MATCH_EXACT || kind > FTS5ICU_MATCH_GLOB) return -1;
+  if (fts5icuOptionsFromString(zLocale, &options)) return -1;
   /* A GLOB pattern matches the text as written, as SQLite's GLOB does: case
    * counts. The other kinds fold as the tokenizer folds. */
   const int bFold = kind != FTS5ICU_MATCH_GLOB;
@@ -585,7 +586,7 @@ int32_t fts5icu_match_ranges(const uint16_t *aText, int32_t nText, const uint16_
     }
     case FTS5ICU_MATCH_WORD:
     case FTS5ICU_MATCH_WORD_PREFIX:
-      rc = icuMatchWords(&text, &query, kind == FTS5ICU_MATCH_WORD_PREFIX, zLocale, &out);
+      rc = icuMatchWords(&text, &query, kind == FTS5ICU_MATCH_WORD_PREFIX, &options, &out);
       break;
     case FTS5ICU_MATCH_GLOB:
       rc = icuMatchGlob(&text, &query, &out);
