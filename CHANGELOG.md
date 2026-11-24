@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.11.1 (2026-11-24)
+
+- Fix: `fts5icu_word_ranges` no longer loses dictionary words in a text whose boundaries fill ICU's 128-boundary cache
+  before them: the second walk sets the text again, as the count did.
+
 ## v0.11.0 (2026-11-24)
 
 - `tokenize='icu split_punctuation'` (the option word before or after the locale) joins the words ICU finds where no
