@@ -591,6 +591,15 @@ int32_t fts5icu_word_ranges(const uint16_t *aText, int32_t nText, const char *zL
     return -1;
   }
 
+  /* ubrk_first() keeps ICU's dictionary cache from the count above, and a second
+   * walk past 128 boundaries can then mark a word as none. Setting the text again
+   * walks it as the count did. */
+  ubrk_setText(pIter, (const UChar *)aText, nText, &status);
+  if (U_FAILURE(status)) {
+    free(aRanges);
+    ubrk_close(pIter);
+    return -1;
+  }
   iPos = ubrk_first(pIter);
   while (fts5icuNextWord(pIter, options.bJoin, &iPos, &iStart, &iEnd)) {
     aRanges[iWord].start = iStart;

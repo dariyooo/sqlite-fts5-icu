@@ -32,6 +32,12 @@ static const WordRangesCase wordRangesCases[] = {
   {"mixed scripts", u"iPhone15を買った", 12, NULL, 0, 5,
    {{0, 8}, {8, 9}, {9, 10}, {10, 11}, {11, 12}}},
   {"markup is ordinary text", u"[[RUN||WALK]]", 13, NULL, 0, 2, {{2, 5}, {7, 11}}},
+  /* 126 marks fill ICU's 128-boundary cache before the dictionary text. */
+  {"dictionary words past a full break cache",
+   u"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+   u"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+   u"々々「カナ",
+   131, NULL, 0, 3, {{126, 127}, {127, 128}, {129, 131}}},
   {"embedded NUL", u"cat\0dog", 7, NULL, 0, 2, {{0, 3}, {4, 7}}},
   {"explicit input length", unterminatedText, 3, NULL, 0, 1, {{0, 3}}},
   {"punctuation and whitespace only", u" !\t\n", 4, NULL, 0, 0, {{0, 0}}},
